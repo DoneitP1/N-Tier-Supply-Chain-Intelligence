@@ -1,0 +1,6 @@
+# N-Tier Supply Chain AI Project Rules
+
+1. ALWAYS apply suggested code changes directly to the project files in the workspace (/Users/29emirhanerturk/Desktop/🫩/N-Tier).
+2. DO NOT just output code snippets in the chat unless specifically asked to "only show the code" or "dry run". 
+3. If providing architectural answers, make the necessary file updates first, then explain what was changed. 
+4. Maintain the strict JSON, confidence scoring, and Neo4j rules defined in the original project prompt.
