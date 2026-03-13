@@ -15,6 +15,12 @@ st.set_page_config(
 # --- Sidebar ---
 st.sidebar.title("N-Tier Platform")
 st.sidebar.info("Supply Chain Intelligence & Risk Propagation Engine")
+
+st.sidebar.markdown("### Authentication")
+api_key = st.sidebar.text_input("Enter App API Key", type="password", help="Required to access the backend API.")
+# Configure auth header
+headers = {"X-App-Api-Key": api_key} if api_key else {}
+
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     "**Core Features:**\n"
@@ -22,6 +28,10 @@ st.sidebar.markdown(
     "- 🧠 Knowledge Graph Ingestion\n"
     "- ⚠️ Multi-Tier Risk Simulation\n"
 )
+
+if not api_key:
+    st.warning("⚠️ Please enter the 'App API Key' in the sidebar to unlock dashboard features.")
+    st.stop()
 
 # --- Main Header ---
 st.title("🛡️ N-Tier Supply Chain Intelligence")
@@ -41,8 +51,11 @@ with tab_dashboard:
     st.header("Network Visualization")
     st.markdown("Interactive Knowledge Graph map of the N-Tier Supply Chain.")
     
+    # Graph limitation to prevent overwhelming Streamlit
+    limit = st.slider("Node/Relationship Limit", min_value=10, max_value=500, value=200, step=10, help="Higher limits might cause UI lag if graph is too large.")
+    
     try:
-        response = requests.get(f"{API_BASE_URL}/api/graph-data")
+        response = requests.get(f"{API_BASE_URL}/api/graph/data?limit={limit}", headers=headers)
         if response.status_code == 200:
             graph_data = response.json()
             raw_nodes = graph_data.get("nodes", [])
@@ -93,6 +106,8 @@ with tab_dashboard:
                 )
                 
                 agraph(nodes=nodes, edges=edges, config=config)
+        elif response.status_code == 401:
+            st.error("Unauthorized: Invalid API Key. Please check the sidebar.")
         else:
             st.error(f"Failed to load graph data. Status: {response.status_code}")
     except requests.exceptions.ConnectionError:
@@ -113,11 +128,13 @@ with tab_ingestion:
                 try:
                     # Prepare the file for upload
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
-                    response = requests.post(f"{API_BASE_URL}/upload-pdf/", files=files)
+                    response = requests.post(f"{API_BASE_URL}/api/ingest/upload-pdf", files=files, headers=headers)
                     
                     if response.status_code == 201 or response.status_code == 200:
                         st.success("Contract successfully analyzed and ingested into the Knowledge Graph!")
                         st.json(response.json())
+                    elif response.status_code == 401:
+                        st.error("Unauthorized: Invalid API Key. Please check the sidebar.")
                     else:
                         st.error(f"Failed to process contract. API returned status code: {response.status_code}")
                         st.json(response.json() if response.content else {"error": "Unknown error"})
@@ -149,7 +166,7 @@ with tab_risk:
                         "impacted_supplier_name": supplier_name,
                         "crisis_duration_days": crisis_duration
                     }
-                    response = requests.post(f"{API_BASE_URL}/simulate-risk/", json=payload)
+                    response = requests.post(f"{API_BASE_URL}/api/risk/simulate", json=payload, headers=headers)
                     
                     if response.status_code == 200:
                         results = response.json()
@@ -195,6 +212,8 @@ with tab_risk:
                                 
                     elif response.status_code == 404:
                             st.error(f"Supplier '{supplier_name}' not found in the Knowledge Graph.")
+                    elif response.status_code == 401:
+                            st.error("Unauthorized: Invalid API Key. Please check the sidebar.")
                     else:
                         st.error(f"API Error ({response.status_code}): {response.text}")
                 except requests.exceptions.ConnectionError:

@@ -1,40 +1,29 @@
-from typing import List, Union
-from pydantic import BaseModel
-
-class RiskSimulationRequest(BaseModel):
-    impacted_supplier_name: str
-    crisis_duration_days: int
-
-class RiskSimulationResult(BaseModel):
-    impacted_paths: List[str]
-    days_to_line_stoppage: Union[float, str]
-    risk_score: str
-    recommendations: str
+from typing import List
+from models.schemas import RiskSimulationResult
 
 async def simulate_risk_propagation(supplier_name: str, crisis_duration_days: int, db_connection) -> List[RiskSimulationResult]:
     """
     Simulates the risk propagation from an impacted supplier up to the parts they supply
     (and potentially to the Factory if mapped in the Knowledge Graph).
     """
-    # MOCK_DAILY_CONSUMPTION acts as a fallback since it's not present in the graph currently.
-    MOCK_DAILY_CONSUMPTION = 50.0
 
     # Cypher Query Logic:
     # 1. MATCH the target Supplier by name. We use a parameterized query to prevent injections.
     # 2. Traverse the [:SUPPLIES] relationship to find the connected Part nodes.
     # 3. Use OPTIONAL MATCH to find any Factory producing those parts (simulating the full path).
-    # 4. Extract required edge properties (min stock, lead time, alt supplier) to evaluate the math.
+    # 4. Extract required edge properties (min stock, lead time, alt supplier, daily consumption) to evaluate the math.
     query = """
     MATCH (s:Supplier {name: $supplier_name})
     OPTIONAL MATCH (s)-[rel:SUPPLIES]->(p:Part)
-    OPTIONAL MATCH (p)<-[:PRODUCES]-(f:Factory)
+    OPTIONAL MATCH (p)<-[con:CONSUMES]-(f:Factory)
     RETURN 
         s.name AS supplier_name,
         p.code AS part_code,
         f.name AS factory_name,
         rel.minimum_stock_units AS minimum_stock_units,
         rel.lead_time_days AS lead_time_days,
-        rel.alt_supplier_allowed AS alt_supplier_allowed
+        rel.alt_supplier_allowed AS alt_supplier_allowed,
+        con.daily_consumption AS daily_consumption
     """
     
     results = await db_connection.execute_query(query, {"supplier_name": supplier_name})
@@ -65,13 +54,14 @@ async def simulate_risk_propagation(supplier_name: str, crisis_duration_days: in
         min_stock = row.get("minimum_stock_units")
         lead_time = row.get("lead_time_days")
         alt_supplier = row.get("alt_supplier_allowed", False)
+        daily_consumption = row.get("daily_consumption")
         
         # Mathematical Accuracy: Days to Line Stoppage = Current Stock / Daily Consumption
-        if min_stock is None:
+        if min_stock is None or daily_consumption is None or daily_consumption <= 0:
             days_to_stoppage = "Unknown"
         else:
             try:
-                days_to_stoppage = round(min_stock / MOCK_DAILY_CONSUMPTION, 1)
+                days_to_stoppage = round(min_stock / daily_consumption, 1)
             except (ZeroDivisionError, TypeError):
                 days_to_stoppage = "Unknown"
                 

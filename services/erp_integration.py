@@ -1,22 +1,5 @@
-from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field
-
-# --- Pydantic Data Models ---
-class Tier1Supplier(BaseModel):
-    name: str = Field(..., description="Name of the Tier-1 supplier.")
-    location: Optional[str] = Field(None, description="Location of the Tier-1 supplier.")
-
-class Tier2Supplier(BaseModel):
-    name: str = Field(..., description="Name of the Tier-2 supplier/subcontractor.")
-    location: Optional[str] = Field(None, description="Location of the Tier-2 supplier.")
-    critical_material: Optional[str] = Field(None, description="Raw material provided.")
-
-class ERPBOMPayload(BaseModel):
-    source: str = Field(..., description="Source system (e.g., SAP_ERP, ORACLE)")
-    factory: str = Field(..., description="Main factory consuming the part")
-    part_code: str = Field(..., description="The unified part code")
-    tier_1_supplier: Tier1Supplier
-    tier_2_supplier: Optional[Tier2Supplier] = None
+from typing import Dict, Any
+from models.schemas import ERPBOMPayload
 
 # --- Ingestion Logic ---
 async def ingest_erp_bom(payload: ERPBOMPayload, db_connection) -> Dict[str, Any]:
@@ -51,7 +34,10 @@ async def ingest_erp_bom(payload: ERPBOMPayload, db_connection) -> Dict[str, Any
         t1.last_updated = timestamp()
         
     // Connect Factory -> Part -> Tier 1
-    MERGE (f)-[:CONSUMES]->(p)
+    MERGE (f)-[con:CONSUMES]->(p)
+    ON CREATE SET con.daily_consumption = $daily_consumption, con.last_updated = timestamp()
+    ON MATCH SET con.daily_consumption = coalesce($daily_consumption, con.daily_consumption), con.last_updated = timestamp()
+    
     MERGE (t1)-[:SUPPLIES]->(p)
     
     // 4. Conditionally Map Tier-2 Supplier (if provided)
@@ -80,6 +66,7 @@ async def ingest_erp_bom(payload: ERPBOMPayload, db_connection) -> Dict[str, Any
         "source": payload.source,
         "factory_name": payload.factory,
         "part_code": payload.part_code,
+        "daily_consumption": payload.daily_consumption_units,
         "t1_name": payload.tier_1_supplier.name,
         "t1_location": payload.tier_1_supplier.location,
         "t2_name": payload.tier_2_supplier.name if payload.tier_2_supplier else None,

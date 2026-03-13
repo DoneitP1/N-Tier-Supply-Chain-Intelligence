@@ -4,30 +4,16 @@ from typing import List
 from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
+from core.config import settings
+import feedparser
+import logging
 
-# --- Data Models (Moved here to centralize News Risk schemas) ---
-class EventClassification(BaseModel):
-    is_supply_chain_risk: bool
-    event_type: str = Field(..., description="e.g., Natural Disaster, Geopolitical")
-    severity: str = Field(..., description="Low, Medium, High, Critical")
-    confidence_score: float = Field(..., ge=0.0, le=1.0)
+logger = logging.getLogger("ntier_news_monitor")
 
-class ImpactDetails(BaseModel):
-    locations_affected: List[str]
-    entities_affected: List[str]
-    confidence_score: float = Field(..., ge=0.0, le=1.0)
-
-class NewsRiskData(BaseModel):
-    document_type: str = "news_risk"
-    event_classification: EventClassification
-    impact_details: ImpactDetails
-    summary: str
-    overall_assessment_confidence: float = Field(..., ge=0.0, le=1.0)
+from models.schemas import NewsRiskData
 
 
-# Initialize the free LLM for background tasks (using Gemini 1.5 Flash)
-# Ensure GOOGLE_API_KEY is in your environment variables.
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
+llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0, google_api_key=settings.google_api_key)
 
 async def extract_news_risk_via_llm(raw_text: str) -> NewsRiskData:
     """
@@ -50,23 +36,40 @@ Evaluate the severity level (Low, Medium, High, Critical) and identify affected 
     chain = prompt | llm.with_structured_output(NewsRiskData)
     return await chain.ainvoke({"raw_text": raw_text})
 
+async def get_real_news() -> List[str]:
+    """Fetches real-time supply chain news from Google News RSS."""
+    url = "https://news.google.com/rss/search?q=supply+chain+disruption+OR+factory+strike+OR+material+shortage+OR+logistics+delay&hl=en-US&gl=US&ceid=US:en"
+    
+    # Run feedparser in a thread since it's synchronous block
+    feed = await asyncio.to_thread(feedparser.parse, url)
+    
+    news_items = []
+    # Take top 5 recent news to process to avoid rate limits
+    for entry in feed.entries[:5]:
+        news_items.append(entry.title)
+        
+    return news_items
+
 async def poll_news_and_analyze(db_connection):
     """
-    Runs in the background, simulating a news stream. Loops through items,
+    Runs in the background, fetching real news from Google RSS,
     runs the free LLM unstructured parsing, and only updates Neo4j if Critical/High.
     """
-    mock_news = [
-        "A massive 7.2 earthquake hit Taiwan, disrupting major semiconductor factories across the island.",
-        "Minor port strike in Hamburg resolved after one day of negotiations.",
-        "Severe flooding in Bursa industrial zone caused power outages at Katman-1 Bursa Auto Parts Ltd.",
-        "New trade agreement signed between Turkey and EU, reducing tariffs on electronics."
-    ]
+    logger.info("Starting asynchronous news polling...")
     
-    print("[News Monitor] Starting asynchronous news polling...")
+    try:
+        news_list = await get_real_news()
+    except Exception as e:
+        logger.error(f"Failed to fetch RSS news: {e}", exc_info=True)
+        return
+        
+    if not news_list:
+        logger.info("No news found in RSS feed.")
+        return
     
-    for news in mock_news:
+    for news in news_list:
         try:
-            print(f"\n[News Monitor] Analyzing: {news}")
+            logger.info(f"Analyzing: {news}")
             extracted_data = await extract_news_risk_via_llm(news)
             
             if extracted_data.event_classification.is_supply_chain_risk:
@@ -74,7 +77,7 @@ async def poll_news_and_analyze(db_connection):
                 
                 # Threshold Logic: Execute Cypher ONLY if High or Critical
                 if severity in ["High", "Critical"]:
-                    print(f"[News Monitor] ⚠️ Threat Detected! Severity: {severity}. Flagging Knowledge Graph...")
+                    logger.warning(f"Threat Detected! Severity: {severity}. Flagging Knowledge Graph...")
                     
                     cypher_query = """
                     UNWIND $locations AS affected_loc
@@ -95,16 +98,16 @@ async def poll_news_and_analyze(db_connection):
                     
                     result = await db_connection.execute_query(cypher_query, parameters)
                     impacted = result[0]['impacted_suppliers'] if result else 0
-                    print(f"[News Monitor] 🔥 Successfully logged to DB. Impacted {impacted} mapped supplier(s).")
+                    logger.info(f"Successfully logged to DB. Impacted {impacted} mapped supplier(s).")
                 else:
-                    print(f"[News Monitor] Risk is {severity}. Ignoring to avoid DB noise.")
+                    logger.info(f"Risk is {severity}. Ignoring to avoid DB noise.")
             else:
-                print(f"[News Monitor] No supply chain risk detected.")
+                logger.info("No supply chain risk detected.")
                 
             # Sleep to respect free-tier API rate limits
             await asyncio.sleep(2)
             
         except Exception as e:
             # Gracefully handle API limits or timeouts without crashing the daemon
-            print(f"[News Monitor] Error analyzing news block: {e}")
+            logger.error(f"Error analyzing news block: {e}", exc_info=True)
             await asyncio.sleep(2)
