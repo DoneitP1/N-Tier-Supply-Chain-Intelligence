@@ -7,7 +7,7 @@ from core.database import db, logger
 from core.config import settings
 
 # APIRouters
-from api.routes import ingestion, graph, risk
+from api.routes import ingestion, graph, risk, auth
 
 # Rate Limiting
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -53,9 +53,14 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 # Include Routers
+app.include_router(auth.router)
 app.include_router(ingestion.router)
 app.include_router(graph.router)
 app.include_router(risk.router)
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

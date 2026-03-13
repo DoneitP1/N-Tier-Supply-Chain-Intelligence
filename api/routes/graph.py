@@ -1,11 +1,14 @@
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from core.database import db, logger
-from api.routes.ingestion import get_api_key
+from core.security import RoleChecker
+
+# RBAC Dependencies
+analyst_or_admin = RoleChecker(["analyst", "admin"])
 
 router = APIRouter(prefix="/api/graph", tags=["Graph Visualization"])
 
-@router.get("/data", status_code=status.HTTP_200_OK, dependencies=[Depends(get_api_key)])
+@router.get("/data", status_code=status.HTTP_200_OK, dependencies=[Depends(analyst_or_admin)])
 async def get_graph_data(limit: int = Query(200, description="Limit max relationships evaluated to prevent UI freeze")):
     """
     Fetches Knowledge Graph nodes and edges for visualization with a hard limit on relationships

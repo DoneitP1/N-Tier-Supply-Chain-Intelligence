@@ -3,11 +3,14 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from models.schemas import RiskSimulationRequest, RiskSimulationResult
 from services.risk_engine import simulate_risk_propagation
 from core.database import db, logger
-from api.routes.ingestion import get_api_key
+from core.security import RoleChecker
+
+# RBAC Dependencies
+analyst_or_admin = RoleChecker(["analyst", "admin"])
 
 router = APIRouter(prefix="/api/risk", tags=["Risk Simulation"])
 
-@router.post("/simulate", status_code=status.HTTP_200_OK, response_model=List[RiskSimulationResult], dependencies=[Depends(get_api_key)])
+@router.post("/simulate", status_code=status.HTTP_200_OK, response_model=List[RiskSimulationResult], dependencies=[Depends(analyst_or_admin)])
 async def simulate_risk(payload: RiskSimulationRequest):
     """
     Simulates risk propagation through the Knowledge Graph.

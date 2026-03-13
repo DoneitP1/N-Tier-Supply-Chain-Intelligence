@@ -76,3 +76,25 @@ class RiskSimulationResult(BaseModel):
     days_to_line_stoppage: Union[float, str]
     risk_score: str
     recommendations: str
+
+# --- Auth & User Models ---
+class UserBase(BaseModel):
+    username: str
+    role: str = Field("analyst", description="Role of the user: admin or analyst")
+
+class UserCreate(UserBase):
+    password: str
+
+class UserInDB(UserBase):
+    hashed_password: str
+
+class User(UserBase):
+    id: Optional[int] = None
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+    role: Optional[str] = None

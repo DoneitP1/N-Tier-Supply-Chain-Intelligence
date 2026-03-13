@@ -13,7 +13,13 @@ logger = logging.getLogger("ntier_news_monitor")
 from models.schemas import NewsRiskData
 
 
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0, google_api_key=settings.google_api_key)
+def get_llm():
+    """Lazy initialization of Gemini to prevent import-time crashes if API keys are missing."""
+    return ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash", 
+        temperature=0, 
+        google_api_key=settings.google_api_key
+    )
 
 async def extract_news_risk_via_llm(raw_text: str) -> NewsRiskData:
     """
@@ -33,6 +39,7 @@ Evaluate the severity level (Low, Medium, High, Critical) and identify affected 
         ("human", "Evaluate the supply chain risk from the following news text:\n\n{raw_text}")
     ])
     
+    llm = get_llm()
     chain = prompt | llm.with_structured_output(NewsRiskData)
     return await chain.ainvoke({"raw_text": raw_text})
 

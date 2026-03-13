@@ -3,30 +3,27 @@ import shutil
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Depends
 from models.schemas import ContractData, RawTextPayload, ERPBOMPayload, NewsRiskData
 from core.database import db, logger
-from core.config import settings
-from fastapi.security import APIKeyHeader
-from services.pdf_processor import process_pdf_and_extract
 from services.news_monitor import extract_news_risk_via_llm
 from services.erp_integration import ingest_erp_bom
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
+from core.security import RoleChecker
 
 router = APIRouter(prefix="/api/ingest", tags=["Ingestion"])
 
-# API Key Validation Dependency
-api_key_header = APIKeyHeader(name="X-App-Api-Key", auto_error=True)
+# RBAC Dependencies
+admin_only = RoleChecker(["admin"])
 
-async def get_api_key(api_key: str = Depends(api_key_header)):
-    if api_key != settings.app_api_key:
-        logger.warning(f"Unauthorized access attempt with key: {api_key}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API Key",
-        )
-    return api_key
+# RBAC Dependencies
+admin_only = RoleChecker(["admin"])
 
-# Initialize LLM for local extraction
-llm = ChatAnthropic(model="claude-3-sonnet-20240229", temperature=0, anthropic_api_key=settings.anthropic_api_key)
+def get_llm():
+    """Lazy initialization of the LLM to prevent import-time crashes if API keys are missing."""
+    return ChatAnthropic(
+        model="claude-3-sonnet-20240229", 
+        temperature=0, 
+        anthropic_api_key=settings.anthropic_api_key
+    )
 
 async def extract_contract_via_llm(raw_text: str) -> ContractData:
     system_prompt = """
@@ -40,10 +37,11 @@ CONFIDENCE SCORING: Calculate and attach a `confidence_score` (0.0 to 1.0) for e
         ("system", system_prompt.strip()),
         ("human", "Extract the supply chain data from the following contract text:\n\n{raw_text}")
     ])
+    llm = get_llm()
     chain = prompt | llm.with_structured_output(ContractData)
     return await chain.ainvoke({"raw_text": raw_text})
 
-@router.post("/process-contract", status_code=status.HTTP_201_CREATED, dependencies=[Depends(get_api_key)])
+@router.post("/process-contract", status_code=status.HTTP_201_CREATED, dependencies=[Depends(admin_only)])
 async def process_contract(contract: ContractData):
     if contract.overall_extraction_confidence < 0.5:
         raise HTTPException(status_code=422, detail="Extraction confidence too low. Requires manual review.")
@@ -83,7 +81,7 @@ async def process_contract(contract: ContractData):
         logger.error(f"Error processing contract in Cypher: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/process-news", status_code=status.HTTP_201_CREATED, dependencies=[Depends(get_api_key)])
+@router.post("/process-news", status_code=status.HTTP_201_CREATED, dependencies=[Depends(admin_only)])
 async def process_news(news: NewsRiskData):
     if not news.event_classification.is_supply_chain_risk:
         return {"status": "ignored", "message": "Event classified as low/no supply chain risk."}
@@ -118,7 +116,7 @@ async def process_news(news: NewsRiskData):
         logger.error(f"Error processing news in Cypher: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/upload-pdf", status_code=status.HTTP_201_CREATED, dependencies=[Depends(get_api_key)])
+@router.post("/upload-pdf", status_code=status.HTTP_201_CREATED, dependencies=[Depends(admin_only)])
 async def upload_pdf(file: UploadFile = File(...)):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
@@ -140,7 +138,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
-@router.post("/analyze-raw-text", status_code=status.HTTP_200_OK, dependencies=[Depends(get_api_key)])
+@router.post("/analyze-raw-text", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_only)])
 async def analyze_raw_text(payload: RawTextPayload):
     raw_text = payload.text.strip()
     if raw_text.startswith("[TYPE: CONTRACT_PDF]"):
@@ -152,7 +150,7 @@ async def analyze_raw_text(payload: RawTextPayload):
     else:
         raise HTTPException(status_code=400, detail="Unknown input format.")
 
-@router.post("/erp-bom", status_code=status.HTTP_201_CREATED, dependencies=[Depends(get_api_key)])
+@router.post("/erp-bom", status_code=status.HTTP_201_CREATED, dependencies=[Depends(admin_only)])
 async def map_erp_bom(payload: ERPBOMPayload):
     try:
         return await ingest_erp_bom(payload, db_connection=db)

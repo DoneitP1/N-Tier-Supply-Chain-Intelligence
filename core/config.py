@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     
     # Application Security
     app_api_key: str = "super_secret_dev_key"
+    secret_key: str = "a_very_secret_key_change_me_in_production"
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
     
     # Use pydantic-settings v2 config style to load from .env automatically
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
