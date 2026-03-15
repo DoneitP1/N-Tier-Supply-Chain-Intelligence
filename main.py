@@ -1,10 +1,14 @@
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 # Implemented Core modules
 from core.database import db, logger
 from core.config import settings
+from core.postgres import engine, Base
+import models.pg_models  # Ensure models are registered
+from core.cache import init_semantic_cache
 
 # APIRouters
 from api.routes import ingestion, graph, risk, auth
@@ -14,6 +18,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # Initialize Rate Limiter
 limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
@@ -34,8 +39,17 @@ async def create_db_constraints():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Create Constraints
+    # Startup: Create Neo4j Constraints
     await create_db_constraints()
+    
+    # Startup: Create PostgreSQL Tables
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("PostgreSQL Tables verified/created.")
+    
+    # Startup: Initialize Semantic Cache
+    init_semantic_cache()
+    
     yield
     # Shutdown: clean up db connection
     await db.close()
@@ -51,6 +65,23 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+# Prometheus Instrumentation
+Instrumentator().instrument(app).expose(app)
+
+# CORS Middleware
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include Routers
 app.include_router(auth.router)

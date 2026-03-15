@@ -12,14 +12,70 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Sidebar ---
-st.sidebar.title("N-Tier Platform")
-st.sidebar.info("Supply Chain Intelligence & Risk Propagation Engine")
+# --- Session State Initialization ---
+if "token" not in st.session_state:
+    st.session_state["token"] = None
+if "user_role" not in st.session_state:
+    st.session_state["user_role"] = None
+if "username" not in st.session_state:
+    st.session_state["username"] = None
 
-st.sidebar.markdown("### Authentication")
-api_key = st.sidebar.text_input("Enter App API Key", type="password", help="Required to access the backend API.")
+# --- Sidebar Authentication ---
+st.sidebar.title("🔐 Authentication")
+
+if st.session_state["token"] is None:
+    auth_mode = st.sidebar.radio("Mode", ["Login", "Register"])
+    
+    with st.sidebar.form("auth_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        
+        if auth_mode == "Register":
+            role = st.selectbox("Role", ["analyst", "admin"])
+            submit = st.form_submit_button("Register")
+        else:
+            submit = st.form_submit_button("Login")
+            
+        if submit:
+            if not username or not password:
+                st.sidebar.error("Please enter both username and password.")
+            else:
+                try:
+                    if auth_mode == "Register":
+                        reg_payload = {"username": username, "password": password, "role": role}
+                        reg_resp = requests.post(f"{API_BASE_URL}/api/auth/register", json=reg_payload)
+                        if reg_resp.status_code == 201:
+                            st.sidebar.success("Registration successful! Please login.")
+                        else:
+                            st.sidebar.error(f"Registration failed: {reg_resp.json().get('detail', 'Unknown error')}")
+                    
+                    # Try login (even after successful register for convenience)
+                    login_data = {"username": username, "password": password}
+                    login_resp = requests.post(f"{API_BASE_URL}/api/auth/token", data=login_data)
+                    
+                    if login_resp.status_code == 200:
+                        token_data = login_resp.json()
+                        st.session_state["token"] = token_data["access_token"]
+                        # We need to decode the token to get the role or just trust the next API call
+                        # For now, let's just use the token
+                        st.session_state["username"] = username
+                        st.sidebar.success(f"Logged in as {username}")
+                        st.rerun()
+                    else:
+                        if auth_mode == "Login":
+                            st.sidebar.error("Invalid credentials.")
+                except requests.exceptions.ConnectionError:
+                    st.sidebar.error("Backend API is offline.")
+else:
+    st.sidebar.write(f"Logged in as: **{st.session_state['username']}**")
+    if st.sidebar.button("Logout"):
+        st.session_state["token"] = None
+        st.session_state["username"] = None
+        st.session_state["user_role"] = None
+        st.rerun()
+
 # Configure auth header
-headers = {"X-App-Api-Key": api_key} if api_key else {}
+headers = {"Authorization": f"Bearer {st.session_state['token']}"} if st.session_state["token"] else {}
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(
@@ -29,8 +85,10 @@ st.sidebar.markdown(
     "- ⚠️ Multi-Tier Risk Simulation\n"
 )
 
-if not api_key:
-    st.warning("⚠️ Please enter the 'App API Key' in the sidebar to unlock dashboard features.")
+if not st.session_state["token"]:
+    st.warning("⚠️ Please login to access the dashboard.")
+    st.title("🛡️ N-Tier Supply Chain Intelligence")
+    st.info("Welcome to the N-Tier Supply Chain platform. Please use the sidebar to authenticate.")
     st.stop()
 
 # --- Main Header ---
@@ -107,7 +165,7 @@ with tab_dashboard:
                 
                 agraph(nodes=nodes, edges=edges, config=config)
         elif response.status_code == 401:
-            st.error("Unauthorized: Invalid API Key. Please check the sidebar.")
+            st.error("Unauthorized: Session expired or invalid credentials. Please login again.")
         else:
             st.error(f"Failed to load graph data. Status: {response.status_code}")
     except requests.exceptions.ConnectionError:
@@ -134,7 +192,7 @@ with tab_ingestion:
                         st.success("Contract successfully analyzed and ingested into the Knowledge Graph!")
                         st.json(response.json())
                     elif response.status_code == 401:
-                        st.error("Unauthorized: Invalid API Key. Please check the sidebar.")
+                        st.error("Unauthorized: Session expired or invalid credentials. Please login again.")
                     else:
                         st.error(f"Failed to process contract. API returned status code: {response.status_code}")
                         st.json(response.json() if response.content else {"error": "Unknown error"})
@@ -213,7 +271,7 @@ with tab_risk:
                     elif response.status_code == 404:
                             st.error(f"Supplier '{supplier_name}' not found in the Knowledge Graph.")
                     elif response.status_code == 401:
-                            st.error("Unauthorized: Invalid API Key. Please check the sidebar.")
+                            st.error("Unauthorized: Session expired or invalid credentials. Please login again.")
                     else:
                         st.error(f"API Error ({response.status_code}): {response.text}")
                 except requests.exceptions.ConnectionError:

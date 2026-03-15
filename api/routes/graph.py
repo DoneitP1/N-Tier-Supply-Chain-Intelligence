@@ -1,7 +1,8 @@
-from typing import Optional
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status, Depends, Query
+from core.security import RoleChecker, get_current_user
+from models.schemas import TokenData
 from core.database import db, logger
-from core.security import RoleChecker
 
 # RBAC Dependencies
 analyst_or_admin = RoleChecker(["analyst", "admin"])

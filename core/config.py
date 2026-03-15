@@ -8,6 +8,14 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = "password"
     
+    # PostgreSQL Database
+    postgres_url: str = "postgresql+asyncpg://user:password@localhost:5432/ntier"
+    
+    # Redis and Celery
+    redis_url: str = "redis://localhost:6379/0"
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/0"
+    
     # LLM APIs
     anthropic_api_key: str = ""
     google_api_key: str = ""

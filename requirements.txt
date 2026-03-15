@@ -18,3 +18,10 @@ pypdf
 python-multipart
 passlib[bcrypt]
 python-jose[cryptography]
+sqlalchemy==2.0.35
+asyncpg==0.29.0
+greenlet
+celery
+redis
+rapidfuzz
+prometheus-fastapi-instrumentator

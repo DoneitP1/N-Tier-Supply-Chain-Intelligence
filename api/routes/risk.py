@@ -1,9 +1,9 @@
-from typing import List
+from typing import List, Union, Optional
 from fastapi import APIRouter, HTTPException, status, Depends
-from models.schemas import RiskSimulationRequest, RiskSimulationResult
+from models.schemas import RiskSimulationRequest, RiskSimulationResult, TokenData
 from services.risk_engine import simulate_risk_propagation
 from core.database import db, logger
-from core.security import RoleChecker
+from core.security import RoleChecker, get_current_user
 
 # RBAC Dependencies
 analyst_or_admin = RoleChecker(["analyst", "admin"])

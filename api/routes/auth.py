@@ -1,24 +1,25 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
-from core.database import db, logger
+from core.database import logger
 from core.config import settings
 from core.security import verify_password, get_password_hash, create_access_token
-from models.schemas import UserCreate, User, Token, UserInDB
+from core.postgres import get_db
+from models.schemas import UserCreate, User, Token
+from models.pg_models import User as DBUser
+from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
-async def get_user(username: str):
-    query = "MATCH (u:User {username: $username}) RETURN u.username AS username, u.hashed_password AS hashed_password, u.role AS role"
-    result = await db.execute_query(query, {"username": username})
-    if result:
-        return UserInDB(**result[0])
-    return None
+async def get_db_user(db: AsyncSession, username: str):
+    result = await db.execute(select(DBUser).filter(DBUser.username == username))
+    return result.scalars().first()
 
 @router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
-async def register(user_in: UserCreate):
+async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     # Check if user already exists
-    if await get_user(user_in.username):
+    if await get_db_user(db, user_in.username):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered"
@@ -26,27 +27,26 @@ async def register(user_in: UserCreate):
     
     hashed_password = get_password_hash(user_in.password)
     
-    # Store user in Neo4j
-    query = """
-    CREATE (u:User {username: $username, hashed_password: $hashed_password, role: $role})
-    RETURN u.username AS username, u.role AS role
-    """
-    params = {
-        "username": user_in.username,
-        "hashed_password": hashed_password,
-        "role": user_in.role
-    }
+    # Store user in PostgreSQL
+    new_user = DBUser(
+        username=user_in.username,
+        hashed_password=hashed_password,
+        role=user_in.role
+    )
     
     try:
-        result = await db.execute_query(query, params)
-        return User(**result[0])
+        db.add(new_user)
+        await db.commit()
+        await db.refresh(new_user)
+        return User(id=new_user.id, username=new_user.username, role=new_user.role)
     except Exception as e:
         logger.error(f"Failed to register user: {e}")
+        await db.rollback()
         raise HTTPException(status_code=500, detail="Registration failed")
 
 @router.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = await get_user(form_data.username)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+    user = await get_db_user(db, form_data.username)
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

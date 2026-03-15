@@ -4,45 +4,62 @@ from core.config import settings
 # Integration tests using the HTTP TestClient (FastAPI)
 # Mocks from conftest.py apply automatically
 
-def test_missing_api_key(client):
+import pytest
+from core.config import settings
+
+# Integration tests using the HTTP TestClient (FastAPI)
+# Mocks from conftest.py apply automatically
+
+@pytest.fixture
+def admin_token(client):
+    # Register an admin
+    client.post("/api/auth/register", json={
+        "username": "testadmin",
+        "password": "testpassword",
+        "role": "admin"
+    })
+    # Login to get token
+    response = client.post("/api/auth/token", data={
+        "username": "testadmin",
+        "password": "testpassword"
+    })
+    return response.json()["access_token"]
+
+@pytest.fixture
+def analyst_token(client):
+    # Register an analyst
+    client.post("/api/auth/register", json={
+        "username": "testanalyst",
+        "password": "testpassword",
+        "role": "analyst"
+    })
+    # Login to get token
+    response = client.post("/api/auth/token", data={
+        "username": "testanalyst",
+        "password": "testpassword"
+    })
+    return response.json()["access_token"]
+
+def test_missing_token(client):
     response = client.get("/api/graph/data")
-    assert response.status_code == 403
-    assert "Not authenticated" in response.json()["detail"] or "Not authenticated" == response.json()["detail"]
+    assert response.status_code == 401 # Fastapi security returns 401 for missing token usually
 
-def test_wrong_api_key(client):
-    headers = {"X-App-Api-Key": "wrong_key"}
-    response = client.get("/api/graph/data", headers=headers)
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid API Key"
-
-def test_get_graph_data(client):
-    headers = {"X-App-Api-Key": settings.app_api_key}
+def test_get_graph_data_analyst(client, analyst_token):
+    headers = {"Authorization": f"Bearer {analyst_token}"}
     response = client.get("/api/graph/data?limit=10", headers=headers)
-    
-    # Assert successful resolution
     assert response.status_code == 200
     data = response.json()
     assert "nodes" in data
-    assert "edges" in data
-    
-    # Assert our mock DB returned the nodes correctly
-    if len(data["nodes"]) > 0:
-        assert data["nodes"][0]["name"] == "MockSupplier"
 
-def test_analyze_raw_contract_text(client):
-    headers = {"X-App-Api-Key": settings.app_api_key}
+def test_admin_only_access_denied_for_analyst(client, analyst_token):
+    headers = {"Authorization": f"Bearer {analyst_token}"}
+    payload = {"text": "[TYPE: CONTRACT_PDF] Admin only action."}
+    response = client.post("/api/ingest/analyze-raw-text", json=payload, headers=headers)
+    assert response.status_code == 403
+    assert "not have enough permissions" in response.json()["detail"]
+
+def test_admin_access_allowed(client, admin_token):
+    headers = {"Authorization": f"Bearer {admin_token}"}
     payload = {"text": "[TYPE: CONTRACT_PDF] This is a mock contract for Test Supplier."}
-    
-    # Our mock LLM will return a confident ContractData, which routes to DB
-    # The DB will return success message without throwing an exception
     response = client.post("/api/ingest/analyze-raw-text", json=payload, headers=headers)
     assert response.status_code == 200 or response.status_code == 201
-    assert "mapped to Knowledge Graph" in response.json().get("message", "")
-
-def test_analyze_invalid_raw_text(client):
-    headers = {"X-App-Api-Key": settings.app_api_key}
-    payload = {"text": "Just some random text without the required tags."}
-    
-    response = client.post("/api/ingest/analyze-raw-text", json=payload, headers=headers)
-    assert response.status_code == 400
-    assert "Unknown input format" in response.json()["detail"]

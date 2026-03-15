@@ -1,21 +1,27 @@
 import os
 import shutil
+from typing import List
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Depends
-from models.schemas import ContractData, RawTextPayload, ERPBOMPayload, NewsRiskData
 from core.database import db, logger
+from core.config import settings
+from core.postgres import get_db
+from core.security import RoleChecker, get_current_user
 from services.news_monitor import extract_news_risk_via_llm
 from services.erp_integration import ingest_erp_bom
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
-from core.security import RoleChecker
+from models.schemas import ContractData, RawTextPayload, ERPBOMPayload, NewsRiskData, TokenData
+from models.pg_models import AuditLog, DocumentMetadata, User as DBUser
+from services.ingestion_tasks import process_document_task
+from services.ingestion_core import process_pdf_and_extract, process_contract
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 router = APIRouter(prefix="/api/ingest", tags=["Ingestion"])
 
 # RBAC Dependencies
 admin_only = RoleChecker(["admin"])
-
-# RBAC Dependencies
-admin_only = RoleChecker(["admin"])
+analyst_or_admin = RoleChecker(["analyst", "admin"])
 
 def get_llm():
     """Lazy initialization of the LLM to prevent import-time crashes if API keys are missing."""
@@ -41,119 +47,162 @@ CONFIDENCE SCORING: Calculate and attach a `confidence_score` (0.0 to 1.0) for e
     chain = prompt | llm.with_structured_output(ContractData)
     return await chain.ainvoke({"raw_text": raw_text})
 
-@router.post("/process-contract", status_code=status.HTTP_201_CREATED, dependencies=[Depends(admin_only)])
-async def process_contract(contract: ContractData):
+@router.post("/process-contract", status_code=status.HTTP_201_CREATED)
+async def process_contract_route(
+    contract: ContractData, 
+    current_user: TokenData = Depends(get_current_user),
+    db_sql: AsyncSession = Depends(get_db)
+):
     if contract.overall_extraction_confidence < 0.5:
         raise HTTPException(status_code=422, detail="Extraction confidence too low. Requires manual review.")
 
-    cypher_query = """
-    MERGE (s:Supplier {name: $supplier_name})
-    ON CREATE SET s.location = $location, s.last_updated = timestamp()
-    ON MATCH SET s.location = coalesce($location, s.location), s.last_updated = timestamp()
-    
-    WITH s
-    UNWIND $parts AS part_data
-    MERGE (p:Part {code: part_data.part_code})
-    
-    MERGE (s)-[rel:SUPPLIES]->(p)
-    ON CREATE SET 
-        rel.lead_time_days = part_data.lead_time_days,
-        rel.minimum_stock_units = part_data.minimum_stock_units,
-        rel.force_majeure = $force_majeure,
-        rel.alt_supplier_allowed = $alt_supplier
-    ON MATCH SET
-        rel.lead_time_days = coalesce(part_data.lead_time_days, rel.lead_time_days),
-        rel.minimum_stock_units = coalesce(part_data.minimum_stock_units, rel.minimum_stock_units)
-    """
-    
-    parameters = {
-        "supplier_name": contract.supplier.name,
-        "location": contract.supplier.location,
-        "parts": [p.model_dump() for p in contract.parts],
-        "force_majeure": contract.clauses.force_majeure_present,
-        "alt_supplier": contract.clauses.alternative_supplier_allowed
-    }
-    
     try:
-        await db.execute_query(cypher_query, parameters)
-        return {"status": "success", "message": f"Contract for {contract.supplier.name} mapped to Knowledge Graph."}
+        return await process_contract(contract, current_user, db_sql)
     except Exception as e:
-        logger.error(f"Error processing contract in Cypher: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to map contract to Neo4j: {e}")
+        raise HTTPException(status_code=500, detail="Database mapping failed")
 
-@router.post("/process-news", status_code=status.HTTP_201_CREATED, dependencies=[Depends(admin_only)])
-async def process_news(news: NewsRiskData):
-    if not news.event_classification.is_supply_chain_risk:
-        return {"status": "ignored", "message": "Event classified as low/no supply chain risk."}
-        
-    cypher_query = """
-    UNWIND $locations AS affected_loc
-    MATCH (s:Supplier)
-    WHERE s.location CONTAINS affected_loc OR s.name IN $entities
+@router.post("/process-news", status_code=status.HTTP_201_CREATED)
+async def process_news(
+    news: NewsRiskData, 
+    current_user: TokenData = Depends(get_current_user),
+    db_sql: AsyncSession = Depends(get_db)
+):
+
+    query = """
+    MERGE (r:RiskEvent {type: $event_type})
+    SET r.severity = $severity, r.summary = $summary
     
-    MERGE (r:RiskEvent {type: $event_type, summary: $summary, severity: $severity})
-    MERGE (s)-[im:IMPACTED_BY {timestamp: timestamp()}]->(r)
-    RETURN count(s) as impacted_suppliers
+    WITH r
+    UNWIND $impacted_entities as entity_name
+    MERGE (ent:Supplier {name: entity_name})
+    MERGE (ent)-[:IS_AFFECTED_BY]->(r)
+    
+    MERGE (usr:User {username: $username})
+    MERGE (r)-[:CREATED_BY]->(usr)
+    RETURN r
     """
-    
-    parameters = {
-        "locations": news.impact_details.locations_affected,
-        "entities": news.impact_details.entities_affected,
+    params = {
         "event_type": news.event_classification.event_type,
         "severity": news.event_classification.severity,
-        "summary": news.summary
+        "summary": news.summary,
+        "impacted_entities": news.impact_details.entities_affected,
+        "username": current_user.username
     }
     
     try:
-        result = await db.execute_query(cypher_query, parameters)
-        impacted_count = result[0]['impacted_suppliers'] if result else 0
-        return {
-            "status": "success", 
-            "message": f"Risk logged. Impacted {impacted_count} suppliers in the graph.",
-            "severity": news.event_classification.severity
-        }
+        await db.execute_query(query, params)
+        
+        # Audit Log in PostgreSQL
+        if db_sql:
+            user_res = await db_sql.execute(select(DBUser).filter(DBUser.username == current_user.username))
+            user = user_res.scalars().first()
+            if user:
+                audit = AuditLog(user_id=user.id, action="ingest_news", target_node=news.event_classification.event_type)
+                db_sql.add(audit)
+                await db_sql.commit()
+                
+        return {"message": f"News event '{news.event_classification.event_type}' mapped to Knowledge Graph"}
     except Exception as e:
-        logger.error(f"Error processing news in Cypher: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to map news to Neo4j: {e}")
+        raise HTTPException(status_code=500, detail="Database mapping failed")
 
-@router.post("/upload-pdf", status_code=status.HTTP_201_CREATED, dependencies=[Depends(admin_only)])
-async def upload_pdf(file: UploadFile = File(...)):
+@router.post("/upload-contract", status_code=status.HTTP_201_CREATED)
+async def upload_pdf(
+    file: UploadFile = File(...), 
+    current_user: TokenData = Depends(admin_only),
+    db_sql: AsyncSession = Depends(get_db)
+):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
         
-    temp_file_path = f"/tmp/{file.filename}"
+    # Persistent temp path for the worker to pick up
+    temp_dir = "/tmp/ntier_uploads"
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_path = os.path.join(temp_dir, f"{current_user.username}_{file.filename}")
     
     try:
-        with open(temp_file_path, "wb") as buffer:
+        with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        contract_text = await process_pdf_and_extract(temp_file_path)
-        extracted_data = await extract_contract_via_llm(contract_text)
-        return await process_contract(extracted_data)
+        # Track Document Metadata in PG
+        user_res = await db_sql.execute(select(DBUser).filter(DBUser.username == current_user.username))
+        user = user_res.scalars().first()
+        
+        doc_meta = DocumentMetadata(filename=file.filename, user_id=user.id if user else None, status="pending")
+        db_sql.add(doc_meta)
+        await db_sql.commit()
+        await db_sql.refresh(doc_meta)
+
+        # Trigger Celery Task instead of inline processing
+        process_document_task.delay(temp_path, file.filename, user.id)
+        
+        return {"message": "Document uploaded and queued for processing", "filename": file.filename}
         
     except Exception as e:
-        logger.error(f"Error uploading PDF: {str(e)}", exc_info=True)
+        logger.error(f"Error uploading and queuing PDF: {str(e)}", exc_info=True)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
 
-@router.post("/analyze-raw-text", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_only)])
-async def analyze_raw_text(payload: RawTextPayload):
+@router.get("/history", response_model=List[dict], dependencies=[Depends(analyst_or_admin)])
+async def get_ingestion_history(
+    current_user: TokenData = Depends(get_current_user),
+    db_sql: AsyncSession = Depends(get_db)
+):
+    """Retrieves history of uploaded documents for the current user."""
+    user_res = await db_sql.execute(select(DBUser).filter(DBUser.username == current_user.username))
+    user = user_res.scalars().first()
+    
+    if not user:
+        return []
+        
+    res = await db_sql.execute(select(DocumentMetadata).filter(DocumentMetadata.user_id == user.id).order_by(DocumentMetadata.id.desc()))
+    docs = res.scalars().all()
+    
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "status": d.status,
+            "created_at": d.created_at.isoformat() if d.created_at else None
+        } for d in docs
+    ]
+
+@router.post("/analyze-raw-text", status_code=status.HTTP_200_OK)
+async def analyze_raw_text(
+    payload: RawTextPayload, 
+    current_user: TokenData = Depends(admin_only),
+    db_sql: AsyncSession = Depends(get_db)
+):
+    """Parses raw text containing [TYPE: ...] tags."""
     raw_text = payload.text.strip()
     if raw_text.startswith("[TYPE: CONTRACT_PDF]"):
         extracted_data = await extract_contract_via_llm(raw_text)
-        return await process_contract(extracted_data)
+        return await process_contract(extracted_data, current_user, db_sql)
     elif raw_text.startswith("[TYPE: NEWS_FEED]"):
         extracted_data = await extract_news_risk_via_llm(raw_text)
-        return await process_news(extracted_data)
+        return await process_news(extracted_data, current_user=current_user, db_sql=db_sql)
     else:
-        raise HTTPException(status_code=400, detail="Unknown input format.")
+        raise HTTPException(status_code=400, detail="Unknown input format. Use [TYPE: ...] tags.")
 
-@router.post("/erp-bom", status_code=status.HTTP_201_CREATED, dependencies=[Depends(admin_only)])
-async def map_erp_bom(payload: ERPBOMPayload):
+@router.post("/erp-bom", status_code=status.HTTP_201_CREATED)
+async def map_erp_bom(
+    payload: ERPBOMPayload, 
+    current_user: TokenData = Depends(admin_only),
+    db_sql: AsyncSession = Depends(get_db)
+):
     try:
-        return await ingest_erp_bom(payload, db_connection=db)
+        result = await ingest_erp_bom(payload, db_connection=db, current_user=current_user)
+        
+        # Audit Log in PostgreSQL
+        user_res = await db_sql.execute(select(DBUser).filter(DBUser.username == current_user.username))
+        user = user_res.scalars().first()
+        if user:
+            audit = AuditLog(user_id=user.id, action="ingest_erp_bom", target_node=payload.factory_name)
+            db_sql.add(audit)
+            await db_sql.commit()
+            
     except Exception as e:
         logger.error(f"Error ingesting ERP BOM: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

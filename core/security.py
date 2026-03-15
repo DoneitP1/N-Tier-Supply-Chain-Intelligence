@@ -43,12 +43,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         username: str = payload.get("sub")
         role: str = payload.get("role")
-        if username is None:
+        if username is None or role is None:
             raise credentials_exception
-        token_data = TokenData(username=username, role=role)
+        return TokenData(username=username, role=role)
     except JWTError:
         raise credentials_exception
-    return token_data
 
 class RoleChecker:
     def __init__(self, allowed_roles: list):
