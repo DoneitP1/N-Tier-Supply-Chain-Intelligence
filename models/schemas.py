@@ -73,6 +73,7 @@ class RiskSimulationRequest(BaseModel):
 
 class RiskSimulationResult(BaseModel):
     impacted_paths: List[str]
+    tier_depth: int = Field(0, description="Depth of the supplier in the chain (0 = direct, 1 = tier-2, etc.)")
     days_to_line_stoppage: Union[float, str]
     risk_score: str
     recommendations: str

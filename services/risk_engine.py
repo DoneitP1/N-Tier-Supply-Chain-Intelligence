@@ -3,98 +3,96 @@ from models.schemas import RiskSimulationResult
 
 async def simulate_risk_propagation(supplier_name: str, crisis_duration_days: int, db_connection) -> List[RiskSimulationResult]:
     """
-    Simulates the risk propagation from an impacted supplier up to the parts they supply
-    (and potentially to the Factory if mapped in the Knowledge Graph).
+    Simulates recursive risk propagation across N-Tier supplier paths.
+    Traverses from the impacted supplier through any number of sub-suppliers
+    until reaching a Part consumed by a Factory.
     """
 
-    # Cypher Query Logic:
-    # 1. MATCH the target Supplier by name. We use a parameterized query to prevent injections.
-    # 2. Traverse the [:SUPPLIES] relationship to find the connected Part nodes.
-    # 3. Use OPTIONAL MATCH to find any Factory producing those parts (simulating the full path).
-    # 4. Extract required edge properties (min stock, lead time, alt supplier, daily consumption) to evaluate the math.
+    # Recursive Cypher Query Logic:
+    # 1. MATCH the target Supplier.
+    # 2. Use variable-length path [:SUPPLIES*] to find all downstream impacts.
+    # 3. Terminate at (p:Part) which is consumed by (f:Factory).
     query = """
-    MATCH (s:Supplier {name: $supplier_name})
-    OPTIONAL MATCH (s)-[rel:SUPPLIES]->(p:Part)
+    MATCH path = (s:Supplier {name: $supplier_name})-[:SUPPLIES*1..5]->(p:Part)
     OPTIONAL MATCH (p)<-[con:CONSUMES]-(f:Factory)
     RETURN 
-        s.name AS supplier_name,
-        p.code AS part_code,
+        nodes(path) AS path_nodes,
+        relationships(path) AS path_rels,
         f.name AS factory_name,
-        rel.minimum_stock_units AS minimum_stock_units,
-        rel.lead_time_days AS lead_time_days,
-        rel.alt_supplier_allowed AS alt_supplier_allowed,
         con.daily_consumption AS daily_consumption
     """
     
     results = await db_connection.execute_query(query, {"supplier_name": supplier_name})
     
-    # If the supplier isn't found, return None so the router can throw a 404 cleanly
     if not results:
         return None
         
     simulations = []
     
     for row in results:
-        supplier = row.get("supplier_name")
-        part = row.get("part_code")
+        path_nodes = row.get("path_nodes", [])
+        path_rels = row.get("path_rels", [])
         factory = row.get("factory_name") or "Factory (Not Mapped)"
-        
-        # If the supplier exists but has no supplies relationships mapped yet
-        if not part:
-            simulations.append(RiskSimulationResult(
-                impacted_paths=[f"Supplier: {supplier}"],
-                days_to_line_stoppage="Unknown",
-                risk_score="Low",
-                recommendations="Supplier has no associated parts mapped in the Knowledge Graph. Risk isolated."
-            ))
-            continue
-            
-        path = [f"Supplier: {supplier}", f"Part: {part}", f"Factory: {factory}"]
-        
-        min_stock = row.get("minimum_stock_units")
-        lead_time = row.get("lead_time_days")
-        alt_supplier = row.get("alt_supplier_allowed", False)
         daily_consumption = row.get("daily_consumption")
         
-        # Mathematical Accuracy: Days to Line Stoppage = Current Stock / Daily Consumption
-        if min_stock is None or daily_consumption is None or daily_consumption <= 0:
+        # Build human-readable path and calculate depth
+        formatted_path = []
+        for node in path_nodes:
+            label = list(node.labels)[0] if node.labels else "Unknown"
+            formatted_path.append(f"{label}: {node.get('name') or node.get('code')}")
+        if factory != "Factory (Not Mapped)":
+            formatted_path.append(f"Factory: {factory}")
+            
+        tier_depth = len(path_nodes) - 2 # Supplier (0) -> ... -> Part (N)
+        
+        # Risk Propagation Math:
+        # We look for the bottleneck (minimum days to stoppage) along the path
+        min_days_to_stoppage = float('inf')
+        bottleneck_reason = ""
+        overall_alt_allowed = True # Assumes safe unless a bottleneck has no alt
+        
+        # Check each supply relationship in the path
+        for rel in path_rels:
+            m_stock = rel.get("minimum_stock_units")
+            # For Tier-N, we don't always have daily consumption at the edge,
+            # but we use the factory's consumption as a proxy for the entire chain impact.
+            if m_stock is not None and daily_consumption and daily_consumption > 0:
+                days = round(m_stock / daily_consumption, 1)
+                if days < min_days_to_stoppage:
+                    min_days_to_stoppage = days
+                    overall_alt_allowed = rel.get("alt_supplier_allowed", False)
+                    l_time = rel.get("lead_time_days", 0)
+                    bottleneck_reason = f"Bottleneck at {rel.type} (Stock: {m_stock}, Lead Time: {l_time})"
+
+        if min_days_to_stoppage == float('inf'):
             days_to_stoppage = "Unknown"
+            risk_score = "Medium"
+            recommendations = "Incomplete supply chain mapping. Manual verification required."
         else:
-            try:
-                days_to_stoppage = round(min_stock / daily_consumption, 1)
-            except (ZeroDivisionError, TypeError):
-                days_to_stoppage = "Unknown"
-                
-        # Risk scoring logic:
-        # High if stoppage days < lead time and no alternative supplier exists; Low otherwise.
-        if isinstance(days_to_stoppage, (int, float)) and lead_time is not None:
-            if days_to_stoppage < lead_time and not alt_supplier:
+            days_to_stoppage = min_days_to_stoppage
+            # Lead time of the immediate link
+            last_rel = path_rels[-1]
+            lead_time = last_rel.get("lead_time_days", 0)
+            
+            if days_to_stoppage < lead_time and not overall_alt_allowed:
                 risk_score = "High"
-                recommendations = (f"CRITICAL: Line stoppage in {days_to_stoppage} days "
-                                   f"(Lead time {lead_time} days). No alt supplier allowed. "
-                                   "Expedite sourcing immediately.")
-            elif days_to_stoppage < lead_time and alt_supplier:
+                recommendations = f"CRITICAL: Line stoppage in {days_to_stoppage} days. No alternative supplier for bottleneck."
+            elif days_to_stoppage < lead_time and overall_alt_allowed:
                 risk_score = "Medium"
-                recommendations = (f"Line stoppage in {days_to_stoppage} days "
-                                   f"(Lead time {lead_time} days). Alt supplier ALLOWED. "
-                                   "Activate alternative supplier protocol immediately.")
+                recommendations = f"WARNING: Potential stoppage in {days_to_stoppage} days. Activate alternative sourcing."
             else:
                 risk_score = "Low"
-                recommendations = (f"Stock level covers lead time "
-                                   f"({days_to_stoppage} days / {lead_time} days lead). "
-                                   "Monitor closely.")
-        else:
-            risk_score = "Medium"
-            recommendations = "Lead time or stock data missing. Manual risk assessment required."
-            
-        # Additional contextual risk factor utilizing crisis_duration payload
-        if isinstance(days_to_stoppage, (int, float)) and crisis_duration_days > days_to_stoppage and risk_score != "High":
-            if not alt_supplier:
-                 risk_score = "High"
-                 recommendations += f" UPDATE: Crisis duration ({crisis_duration_days} days) exceeds stock."
+                recommendations = f"Buffer levels sufficient ({days_to_stoppage} days) for currently mapped lead times."
+
+        # Crisis duration override
+        if isinstance(days_to_stoppage, (int, float)) and crisis_duration_days > days_to_stoppage:
+            if risk_score != "High":
+                risk_score = "High"
+                recommendations += f" Crisis duration ({crisis_duration_days}d) exceeds coverage."
 
         simulations.append(RiskSimulationResult(
-            impacted_paths=path,
+            impacted_paths=formatted_path,
+            tier_depth=tier_depth,
             days_to_line_stoppage=days_to_stoppage,
             risk_score=risk_score,
             recommendations=recommendations
