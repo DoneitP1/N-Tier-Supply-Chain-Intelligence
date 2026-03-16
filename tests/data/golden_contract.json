@@ -1,0 +1,22 @@
+{
+  "raw_text": "CONTRACT AGREEMENT: This agreement is between Global Logistics Inc and TechParts Corp. TechParts (the supplier) located in Berlin, Germany, agrees to supply part ACME-999. Force majeure clause is present. Alternative suppliers are not allowed.",
+  "expected_output": {
+    "supplier": {
+      "name": "TechParts Corp",
+      "location": "Berlin, Germany",
+      "confidence_score": 1.0
+    },
+    "parts": [
+      {
+        "part_code": "ACME-999",
+        "confidence_score": 1.0
+      }
+    ],
+    "clauses": {
+      "force_majeure_present": true,
+      "alternative_supplier_allowed": false,
+      "confidence_score": 1.0
+    },
+    "overall_extraction_confidence": 1.0
+  }
+}

@@ -66,19 +66,8 @@ async def process_news(
     db_sql: AsyncSession = Depends(get_db)
 ):
 
-    query = """
-    MERGE (r:RiskEvent {type: $event_type})
-    SET r.severity = $severity, r.summary = $summary
+    from core.outbox import push_to_outbox
     
-    WITH r
-    UNWIND $impacted_entities as entity_name
-    MERGE (ent:Supplier {name: entity_name})
-    MERGE (ent)-[:IS_AFFECTED_BY]->(r)
-    
-    MERGE (usr:User {username: $username})
-    MERGE (r)-[:CREATED_BY]->(usr)
-    RETURN r
-    """
     params = {
         "event_type": news.event_classification.event_type,
         "severity": news.event_classification.severity,
@@ -88,21 +77,30 @@ async def process_news(
     }
     
     try:
-        await db.execute_query(query, params)
+        # Instead of direct Neo4j update, push to Outbox
+        await push_to_outbox(db_sql, "sync_news", params)
         
         # Audit Log in PostgreSQL
         if db_sql:
             user_res = await db_sql.execute(select(DBUser).filter(DBUser.username == current_user.username))
             user = user_res.scalars().first()
             if user:
-                audit = AuditLog(user_id=user.id, action="ingest_news", target_node=news.event_classification.event_type)
+                import json
+                audit = AuditLog(
+                    user_id=user.id, 
+                    action="ingest_news", 
+                    target_node=news.event_classification.event_type,
+                    new_value=json.dumps(news.model_dump())
+                )
                 db_sql.add(audit)
-                await db_sql.commit()
+        
+        # Commit both Outbox and Audit Log
+        await db_sql.commit()
                 
-        return {"message": f"News event '{news.event_classification.event_type}' mapped to Knowledge Graph"}
+        return {"message": f"News event '{news.event_classification.event_type}' queued for Knowledge Graph sync"}
     except Exception as e:
-        logger.error(f"Failed to map news to Neo4j: {e}")
-        raise HTTPException(status_code=500, detail="Database mapping failed")
+        logger.error(f"Failed to queue news for Neo4j: {e}")
+        raise HTTPException(status_code=500, detail="Database queuing failed")
 
 @router.post("/upload-contract", status_code=status.HTTP_201_CREATED)
 async def upload_pdf(
@@ -190,16 +188,26 @@ async def map_erp_bom(
     db_sql: AsyncSession = Depends(get_db)
 ):
     try:
-        result = await ingest_erp_bom(payload, db_connection=db, current_user=current_user)
+        # Refactored: ingest_erp_bom now pushes to outbox
+        result = await ingest_erp_bom(payload, db_sql=db_sql, current_user=current_user)
         
         # Audit Log in PostgreSQL
         user_res = await db_sql.execute(select(DBUser).filter(DBUser.username == current_user.username))
         user = user_res.scalars().first()
         if user:
-            audit = AuditLog(user_id=user.id, action="ingest_erp_bom", target_node=payload.factory_name)
+            import json
+            audit = AuditLog(
+                user_id=user.id, 
+                action="ingest_erp_bom", 
+                target_node=payload.factory,
+                new_value=json.dumps(payload.model_dump())
+            )
             db_sql.add(audit)
-            await db_sql.commit()
+        
+        # Commit both transactionally
+        await db_sql.commit()
+        return result
             
     except Exception as e:
-        logger.error(f"Error ingesting ERP BOM: {str(e)}", exc_info=True)
+        logger.error(f"Error queuing ERP BOM: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

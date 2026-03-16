@@ -71,10 +71,7 @@ app.add_middleware(SlowAPIMiddleware)
 Instrumentator().instrument(app).expose(app)
 
 # CORS Middleware
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+origins = settings.allowed_origins
 
 app.add_middleware(
     CORSMiddleware,

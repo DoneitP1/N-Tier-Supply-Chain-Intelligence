@@ -3,8 +3,10 @@ import sys
 from unittest.mock import MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
-# 1. Prevent asyncpg from being required during engine creation
+# 1. Prevent missing dependencies from being required during import
 sys.modules["asyncpg"] = MagicMock()
+sys.modules["prometheus_client"] = MagicMock()
+sys.modules["prometheus_fastapi_instrumentator"] = MagicMock()
 
 # 2. Mock the engine creation in core.postgres before main is imported
 import sqlalchemy.ext.asyncio
@@ -68,7 +70,11 @@ def mock_sql_session():
         return mock_result
 
     mock_result = MagicMock()
+    mock_result._is_cursor = False
+    mock_result.context = MagicMock()
+    mock_result.context._is_server_side = False
     mock_result.scalars.return_value.first.side_effect = lambda: mock_user
+    mock_result.scalars.return_value.all.return_value = [mock_user]
     mock_session.execute.side_effect = mock_execute_impl
     
     # To handle the role dynamically:
@@ -130,3 +136,11 @@ def mock_llm_chains(monkeypatch):
     monkeypatch.setattr("api.routes.ingestion.extract_news_risk_via_llm", mock_extract_news)
     monkeypatch.setattr("services.ingestion_tasks.extract_news_risk_via_llm", mock_extract_news)
     monkeypatch.setattr("services.news_monitor.extract_news_risk_via_llm", mock_extract_news)
+
+@pytest.fixture
+def golden_contract():
+    import os
+    import json
+    path = os.path.join(os.path.dirname(__file__), "data", "golden_contract.json")
+    with open(path, "r") as f:
+        return json.load(f)

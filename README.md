@@ -1,39 +1,63 @@
 # N-Tier Supply Chain Intelligence Platform
 
-This platform implements the "N-Tier Supply Chain Intelligence" system designed for the Bursa Automotive Pilot. The application utilizes a FastAPI backend powered by LangChain and Neo4j for N-Tier Knowledge Graph mapping, and features a modern Next.js frontend for risk monitoring and graph visualization.
+A high-performance supply chain risk analysis and data ingestion platform built with a modern, n-tier architecture. This system leverages Graph Databases (Neo4j) for deep relationship analysis and Large Language Models (LLM) for automated data extraction.
 
-## Core Features
-- **Contract Ingestion (LLM)**: Automated chunking and parsing of unstructured PDF contracts using an LLM (Claude Sonnet / Gemini) into structured JSON.
-- **ERP Integration**: Synchronous injection of structured ERP/Customs Bill of Materials data directly into the Knowledge Graph bypassing LLMs.
-- **Background News Monitoring**: Asynchronous real-time news evaluation highlighting high/critical supply chain risks continuously running on background tasks.
-- **Risk Propagation Engine**: Multi-hop path traversal simulation calculating days to "Line Stoppage" propagating risks from lower tier suppliers to main factories.
-- **Interactive Graph Visualization**: Premium Next.js frontend UI presenting a physics-based relational Knowledge Graph rendered dynamically using ReactFlow.
+## 🚀 Modern Tech Stack
 
-## Technology Stack
-- **Backend**: FastAPI, Neo4j Async Driver, LangChain, Pydantic, Python 3.12+
-- **Frontend**: Next.js 15, ReactFlow, TailwindCSS, Lucide React
-- **AI/LLM**: Anthropic Claude-3, Google Gemini 1.5 Flash (Free Tier monitoring)
+- **Frontend**: Next.js 14, React, TypeScript, Framer Motion (Glassmorphism UI)
+- **Backend**: FastAPI (Python 3.11+), Pydantic v2
+- **Data Layers**:
+  - **Neo4j**: Graph database for N-tier supply chain modeling and recursive risk propagation.
+  - **PostgreSQL**: Relational database for user management, auditing, and document metadata.
+  - **Redis**: Caching layer and Celery task broker.
+- **AI/LLM**: LangChain, Anthropic (Claude 3), Google Gemini (Optional)
+- **DevOps & Monitoring**:
+  - **Docker Compose**: Full stack orchestration.
+  - **Prometheus & Grafana**: Real-time observability and dashboarding.
+  - **Celery & Redis**: Asynchronous task processing (Outbox Pattern).
 
-## Running the Application
+## 💡 Key Features
 
-Ensure you have a local Neo4j desktop instance or AuraDB set up.
+### 1. N-Tier Recursive Risk Engine
+Analyzes supply chain disruptions up to 5 tiers deep. Uses Cypher recursive queries to identify cascading impacts from suppliers to final production factories, highlighting stock-out risks based on lead times.
 
-### Backend (FastAPI)
-1. Ensure you have activated your virtual environment.
-2. Start the engine from the root directory:
-```bash
-uvicorn main:app --reload
-```
+### 2. Intelligent Data Ingestion
+- **PDF Extraction**: Automated LLM-powered extraction from logistics contracts and news feeds.
+- **Outbox Pattern**: Ensures eventual consistency between PostgreSQL (Audit) and Neo4j (Graph) through transactional events.
+- **Entity Resolution**: High-performance fuzzy matching using Neo4j Full-Text Search and Vector Indexing.
 
-### Frontend (Next.js)
-Start the modern dashboard interface:
-```bash
-cd frontend
-npm run dev
-```
+### 3. Professional Observability
+Integrated Prometheus metrics tracking API response times, ingestion success rates, and LLM token usage, visualized through Grafana dashboards.
 
-### Legacy Interface (Streamlit)
-For internal prototyping purposes only:
-```bash
-streamlit run app.py
-```
+## 🛠 Getting Started
+
+### Prerequisites
+- Docker & Docker Compose
+- Anthropic API Key (Claude)
+
+### Installation
+1. Clone the repository.
+2. Create a `.env` file in the root:
+   ```env
+   ANTHROPIC_API_KEY=your_key_here
+   NEO4J_PASSWORD=password
+   POSTGRES_PASSWORD=password
+   ```
+3. Spin up the infrastructure:
+   ```bash
+   docker-compose up --build
+   ```
+4. Access the platforms:
+   - **Frontend**: `http://localhost:3000`
+   - **API Docs**: `http://localhost:8000/docs`
+   - **Grafana**: `http://localhost:3001` (Admin/admin)
+
+## 🏗 Architecture Analysis
+The project follows a clean, layered architecture:
+- `api/routes`: RESTful endpoints with RBAC (analyst/admin roles).
+- `services`: Business logic (Risk Engine, Ingestion Core, ERP Integration).
+- `models`: Unified schemas for PG and Neo4j.
+- `core`: Centralized configuration, security, and telemetry.
+
+---
+*Developed for High-Precision Supply Chain Intelligence.*

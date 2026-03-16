@@ -18,6 +18,9 @@ class AuditLog(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     action = Column(String, nullable=False)
     target_node = Column(String)
+    old_value = Column(String, nullable=True) # JSON or descriptive string
+    new_value = Column(String, nullable=True) # JSON or descriptive string
+    ip_address = Column(String, nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
 class DocumentMetadata(Base):
@@ -28,3 +31,14 @@ class DocumentMetadata(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     status = Column(String, default="processed") # processed, failed, pending
     upload_timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_events"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    event_type = Column(String, nullable=False) # e.g., 'sync_contract', 'sync_news'
+    payload = Column(String, nullable=False) # JSON payload
+    status = Column(String, default="pending") # pending, processed, failed
+    retries = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    processed_at = Column(DateTime(timezone=True), nullable=True)

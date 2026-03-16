@@ -18,11 +18,12 @@ export default function IngestionPage() {
   const [uploading, setUploading] = useState(false);
   const [history, setHistory] = useState<DocumentMetadata[]>([]);
   const [message, setMessage] = useState('');
+  const [rawText, setRawText] = useState('');
+  const [analyzing, setAnalyzing] = useState(false);
+  const [activeTab, setActiveTab] = useState<'upload' | 'raw'>('upload');
 
   const fetchHistory = async () => {
     try {
-      // Assuming we have an endpoint for this (or we need to add it)
-      // For now, let's assume get /api/ingest/history exists or we'll add a helper
       const response = await api.get('/api/ingest/history');
       setHistory(response.data);
     } catch (err) {
@@ -60,54 +61,117 @@ export default function IngestionPage() {
     }
   };
 
+  const handleRawSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rawText.trim()) return;
+
+    setAnalyzing(true);
+    setMessage('');
+    try {
+      await api.post('/api/ingest/analyze-raw-text', { text: rawText });
+      setMessage('Text analyzed successfully.');
+      setRawText('');
+      fetchHistory();
+    } catch (err: any) {
+      setMessage(err.response?.data?.detail || 'Analysis failed');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
   return (
     <DashboardLayout>
+      <div className="flex space-x-4 mb-8">
+        <button 
+          onClick={() => setActiveTab('upload')}
+          className={cn(
+            "px-6 py-2 rounded-xl text-sm font-semibold transition-all",
+            activeTab === 'upload' ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20" : "bg-white/5 text-slate-400 hover:bg-white/10"
+          )}
+        >
+          PDF Upload
+        </button>
+        <button 
+          onClick={() => setActiveTab('raw')}
+          className={cn(
+            "px-6 py-2 rounded-xl text-sm font-semibold transition-all",
+            activeTab === 'raw' ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20" : "bg-white/5 text-slate-400 hover:bg-white/10"
+          )}
+        >
+          Raw Text Analysis
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div>
-          <h3 className="text-xl font-bold mb-6">Contract Ingestion</h3>
-          <form onSubmit={handleUpload} className="glass p-8 rounded-3xl border-2 border-dashed border-[#1e293b] hover:border-blue-500/50 transition-all text-center">
-            <div className="flex flex-col items-center">
-              <div className="w-16 h-16 bg-blue-600/10 rounded-2xl flex items-center justify-center text-blue-500 mb-4">
-                <Upload size={32} />
-              </div>
-              <h4 className="text-lg font-semibold">Upload PDF Contract</h4>
-              <p className="text-slate-400 text-sm mt-2 mb-6">Drag and drop your file here, or click to browse</p>
-              
-              <input 
-                type="file" 
-                accept=".pdf" 
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="hidden" 
-                id="file-upload"
-              />
-              <label 
-                htmlFor="file-upload"
-                className="px-6 py-3 bg-[#1e293b] hover:bg-[#2d3a4f] text-white rounded-xl text-sm font-semibold cursor-pointer transition-all inline-block"
-              >
-                {file ? file.name : 'Select File'}
-              </label>
+          {activeTab === 'upload' ? (
+            <>
+              <h3 className="text-xl font-bold mb-6">Contract Ingestion</h3>
+              <form onSubmit={handleUpload} className="glass p-8 rounded-3xl border-2 border-dashed border-[#1e293b] hover:border-blue-500/50 transition-all text-center">
+                <div className="flex flex-col items-center">
+                  <div className="w-16 h-16 bg-blue-600/10 rounded-2xl flex items-center justify-center text-blue-500 mb-4">
+                    <Upload size={32} />
+                  </div>
+                  <h4 className="text-lg font-semibold">Upload PDF Contract</h4>
+                  <p className="text-slate-400 text-sm mt-2 mb-6">Drag and drop your file here, or click to browse</p>
+                  
+                  <input 
+                    type="file" 
+                    accept=".pdf" 
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                    className="hidden" 
+                    id="file-upload"
+                  />
+                  <label 
+                    htmlFor="file-upload"
+                    className="px-6 py-3 bg-[#1e293b] hover:bg-[#2d3a4f] text-white rounded-xl text-sm font-semibold cursor-pointer transition-all inline-block"
+                  >
+                    {file ? file.name : 'Select File'}
+                  </label>
 
-              {file && (
+                  {file && (
+                    <button
+                      type="submit"
+                      disabled={uploading}
+                      className="mt-6 w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-lg shadow-blue-500/20 flex items-center justify-center space-x-2 disabled:opacity-50"
+                    >
+                      {uploading ? <Loader2 className="animate-spin" size={20} /> : <FileText size={20} />}
+                      <span>{uploading ? 'Processing...' : 'Start Extraction'}</span>
+                    </button>
+                  )}
+                </div>
+              </form>
+            </>
+          ) : (
+            <>
+              <h3 className="text-xl font-bold mb-6">Raw Text Analysis</h3>
+              <form onSubmit={handleRawSubmit} className="glass p-6 rounded-3xl border border-[#1e293b]">
+                <textarea 
+                  className="w-full h-64 bg-[#0d0d0f] border border-[#1e293b] rounded-2xl p-4 text-sm focus:border-blue-500 outline-none transition-all mb-4 font-mono"
+                  placeholder="Paste text prefixed with [TYPE: CONTRACT_PDF] or [TYPE: NEWS_FEED]..."
+                  value={rawText}
+                  onChange={(e) => setRawText(e.target.value)}
+                />
                 <button
                   type="submit"
-                  disabled={uploading}
-                  className="mt-6 w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-lg shadow-blue-500/20 flex items-center justify-center space-x-2 disabled:opacity-50"
+                  disabled={analyzing}
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-lg shadow-blue-500/20 flex items-center justify-center space-x-2 disabled:opacity-50"
                 >
-                  {uploading ? <Loader2 className="animate-spin" size={20} /> : <FileText size={20} />}
-                  <span>{uploading ? 'Processing...' : 'Start Extraction'}</span>
+                  {analyzing ? <Loader2 className="animate-spin" size={20} /> : <FileText size={20} />}
+                  <span>{analyzing ? 'Analyzing...' : 'Execute Analysis'}</span>
                 </button>
-              )}
-            </div>
+              </form>
+            </>
+          )}
 
-            {message && (
-              <p className={cn(
-                "mt-4 text-sm font-medium",
-                message.includes('success') ? "text-emerald-500" : "text-red-500"
-              )}>
-                {message}
-              </p>
-            )}
-          </form>
+          {message && (
+            <p className={cn(
+              "mt-4 text-sm font-medium p-4 rounded-xl",
+              message.includes('success') || message.includes('successfully') ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
+            )}>
+              {message}
+            </p>
+          )}
         </div>
 
         <div>
@@ -117,15 +181,15 @@ export default function IngestionPage() {
               <table className="w-full text-left">
                 <thead className="bg-[#111113] border-b border-[#1e293b]">
                   <tr>
-                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Filename</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Resource</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Status</th>
-                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Uploaded</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Time</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1e293b]">
                   {history.map((doc) => (
                     <tr key={doc.id} className="hover:bg-white/[0.02] transition-all">
-                      <td className="px-6 py-4 font-medium">{doc.filename}</td>
+                      <td className="px-6 py-4 font-medium truncate max-w-[150px]">{doc.filename || "Raw Text"}</td>
                       <td className="px-6 py-4">
                         <div className="flex items-center space-x-2">
                           {doc.status === 'processed' ? (
@@ -145,7 +209,7 @@ export default function IngestionPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4 text-xs text-slate-500">
-                        {new Date(doc.created_at).toLocaleString()}
+                        {new Date(doc.created_at).toLocaleTimeString()}
                       </td>
                     </tr>
                   ))}
