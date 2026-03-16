@@ -26,7 +26,7 @@ export default function LoginPage() {
       // Fetch user info (assuming we have an endpoint or we parse JWT)
       // For now, let's assume a dummy role until we have a /me endpoint
       setAuth(access_token, { username, role: 'admin' });
-      router.push('/dashboard');
+      router.push('/');
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Login failed');
     }

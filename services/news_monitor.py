@@ -8,6 +8,8 @@ from core.config import settings
 import feedparser
 import logging
 
+from core.prompt_loader import load_prompt
+
 logger = logging.getLogger("ntier_news_monitor")
 
 from models.schemas import NewsRiskData
@@ -30,23 +32,16 @@ async def extract_news_risk_via_llm(news_text: str) -> NewsRiskData:
     """
     Evaluates news risk using Gemini 1.5 Flash via LangChain.
     """
-    system_prompt = """
-You are a Supply Chain Risk Assessor. Your job is to evaluate news feeds for direct or indirect supply chain risks.
-
-STRICT JSON REQUIREMENT: Output MUST exactly match the required schema. Do not include markdown formatting or conversational filler.
-NO HALLUCINATIONS: Extract only facts presented in the text.
-CONFIDENCE SCORING: Provide a `confidence_score` (0.0 to 1.0) for your assessments based on the explicit nature of the text.
-Evaluate the severity level (Low, Medium, High, Critical) and identify affected locations and entities.
-    """
+    prompts = load_prompt("news_extraction")
     
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt.strip()),
-        ("human", "Evaluate the supply chain risk from the following news text:\n\n{raw_text}")
+        ("system", prompts["system_prompt"].strip()),
+        ("human", prompts["human_prompt"].strip())
     ])
     
     llm = get_llm()
     chain = prompt | llm.with_structured_output(NewsRiskData)
-    return await chain.ainvoke({"raw_text": raw_text})
+    return await chain.ainvoke({"raw_text": news_text})
 
 async def get_real_news() -> List[str]:
     """Fetches real-time supply chain news from Google News RSS."""

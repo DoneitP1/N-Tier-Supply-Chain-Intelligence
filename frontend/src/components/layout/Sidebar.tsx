@@ -20,7 +20,7 @@ export default function Sidebar() {
   const logout = useAuthStore((state) => state.logout);
 
   const navItems = [
-    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+    { name: 'Dashboard', href: '/', icon: LayoutDashboard },
     { name: 'Knowledge Graph', href: '/graph', icon: Network },
     { name: 'Ingestion', href: '/ingestion', icon: Files },
     { name: 'Risk Analytics', href: '/risk', icon: Activity },

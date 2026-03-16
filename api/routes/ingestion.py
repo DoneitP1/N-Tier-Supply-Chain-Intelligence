@@ -17,6 +17,8 @@ from services.ingestion_core import process_pdf_and_extract, process_contract
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from core.prompt_loader import load_prompt
+
 router = APIRouter(prefix="/api/ingest", tags=["Ingestion"])
 
 # RBAC Dependencies
@@ -32,16 +34,11 @@ def get_llm():
     )
 
 async def extract_contract_via_llm(raw_text: str) -> ContractData:
-    system_prompt = """
-You are an expert Supply Chain Data Extractor. Your job is to extract supplier information, parts details, and clauses from the provided contract text.
-
-STRICT JSON REQUIREMENT: Output MUST exactly match the required schema. Do not include markdown formatting or conversational filler.
-NO HALLUCINATIONS: If a specific data point is missing from the input text, set its value to null. Do not invent names, locations, or lead times.
-CONFIDENCE SCORING: Calculate and attach a `confidence_score` (0.0 to 1.0) for every major entity extracted, based on the clarity and explicit nature of the text.
-    """
+    prompts = load_prompt("contract_extraction")
+    
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt.strip()),
-        ("human", "Extract the supply chain data from the following contract text:\n\n{raw_text}")
+        ("system", prompts["system_prompt"].strip()),
+        ("human", prompts["human_prompt"].strip())
     ])
     llm = get_llm()
     chain = prompt | llm.with_structured_output(ContractData)
