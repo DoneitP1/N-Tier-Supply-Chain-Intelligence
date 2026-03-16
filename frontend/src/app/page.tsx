@@ -1,48 +1,130 @@
 "use client";
 
+import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import { 
   Users, 
   Package, 
   AlertTriangle, 
-  TrendingUp 
+  TrendingUp,
+  Loader2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import api from '@/lib/api';
+
+interface StatsData {
+  total_suppliers: number;
+  total_parts: number;
+  active_risks: number;
+  supply_health: number;
+  trends: {
+    suppliers: string;
+    parts: string;
+    risks: string;
+    health: string;
+  };
+}
 
 export default function Home() {
-  const stats = [
-    { name: 'Total Suppliers', value: '1,248', change: '+12%', icon: Users, color: 'text-blue-500', bg: 'bg-blue-500/10' },
-    { name: 'Mapped Parts', value: '45,032', change: '+5%', icon: Package, color: 'text-purple-500', bg: 'bg-purple-500/10' },
-    { name: 'Active Risks', value: '18', change: '-2', icon: AlertTriangle, color: 'text-red-500', bg: 'bg-red-500/10' },
-    { name: 'Supply Health', value: '94.2%', change: '+1.4%', icon: TrendingUp, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-  ];
+  const [statsData, setStatsData] = useState<StatsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        setLoading(true);
+        const response = await api.get('/api/stats');
+        setStatsData(response.data);
+        setError(null);
+      } catch (err: any) {
+        console.error('Failed to fetch stats:', err);
+        setError('Failed to load dashboard statistics.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchStats();
+  }, []);
+
+  const stats = statsData ? [
+    { 
+      name: 'Total Suppliers', 
+      value: statsData.total_suppliers.toLocaleString(), 
+      change: statsData.trends.suppliers, 
+      icon: Users, 
+      color: 'text-blue-500', 
+      bg: 'bg-blue-500/10' 
+    },
+    { 
+      name: 'Mapped Parts', 
+      value: statsData.total_parts.toLocaleString(), 
+      change: statsData.trends.parts, 
+      icon: Package, 
+      color: 'text-purple-500', 
+      bg: 'bg-purple-500/10' 
+    },
+    { 
+      name: 'Active Risks', 
+      value: statsData.active_risks.toString(), 
+      change: statsData.trends.risks, 
+      icon: AlertTriangle, 
+      color: 'text-red-500', 
+      bg: 'bg-red-500/10' 
+    },
+    { 
+      name: 'Supply Health', 
+      value: `${statsData.supply_health}%`, 
+      change: statsData.trends.health, 
+      icon: TrendingUp, 
+      color: 'text-emerald-500', 
+      bg: 'bg-emerald-500/10' 
+    },
+  ] : [];
 
   return (
     <DashboardLayout>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        {stats.map((stat) => {
-          const Icon = stat.icon;
-          return (
-            <div key={stat.name} className="glass p-6 rounded-2xl">
-              <div className="flex justify-between items-start mb-4">
-                <div className={cn("p-3 rounded-xl", stat.bg)}>
-                  <Icon size={24} className={stat.color} />
+      {loading ? (
+        <div className="flex items-center justify-center p-12">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+          <span className="ml-3 text-slate-400">Loading dashboard data...</span>
+        </div>
+      ) : error ? (
+        <div className="p-6 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-500 mb-8">
+          {error}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {stats.map((stat) => {
+            const Icon = stat.icon;
+            const isNeutral = stat.change === '0' || stat.change === '+0%' || stat.change === '-0%';
+            const isPositive = stat.change.startsWith('+');
+            
+            return (
+              <div key={stat.name} className="glass p-6 rounded-2xl">
+                <div className="flex justify-between items-start mb-4">
+                  <div className={cn("p-3 rounded-xl", stat.bg)}>
+                    <Icon size={24} className={stat.color} />
+                  </div>
+                  <span className={cn(
+                    "text-xs font-semibold px-2 py-1 rounded-full",
+                    isNeutral ? "bg-slate-500/10 text-slate-500" :
+                    isPositive ? "bg-emerald-500/10 text-emerald-500" : 
+                    "bg-red-500/10 text-red-500"
+                  )}>
+                    {stat.change}
+                  </span>
                 </div>
-                <span className={cn(
-                  "text-xs font-semibold px-2 py-1 rounded-full",
-                  stat.change.startsWith('+') ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
-                )}>
-                  {stat.change}
-                </span>
+                <div>
+                  <p className="text-slate-400 text-sm">{stat.name}</p>
+                  <p className="text-3xl font-bold mt-1">{stat.value}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-slate-400 text-sm">{stat.name}</p>
-                <p className="text-3xl font-bold mt-1">{stat.value}</p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 glass p-6 rounded-2xl h-[400px]">

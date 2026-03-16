@@ -15,6 +15,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 const initialNodes: Node[] = [];
 const initialEdges: Edge[] = [];
@@ -150,4 +151,3 @@ export default function GraphExplorer() {
   );
 }
 
-import { cn } from '@/lib/utils';

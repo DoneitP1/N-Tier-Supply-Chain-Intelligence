@@ -20,12 +20,12 @@ export default function LoginPage() {
       formData.append('username', username);
       formData.append('password', password);
       
-      const response = await api.post('/api/auth/token', formData);
-      const { access_token } = response.data;
+      await api.post('/api/auth/token', formData);
       
-      // Fetch user info (assuming we have an endpoint or we parse JWT)
-      // For now, let's assume a dummy role until we have a /me endpoint
-      setAuth(access_token, { username, role: 'admin' });
+      // Fetch user info - cookie will be sent automatically
+      const userResponse = await api.get('/api/auth/me');
+      
+      setAuth(userResponse.data);
       router.push('/');
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Login failed');

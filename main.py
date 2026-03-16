@@ -11,7 +11,7 @@ import models.pg_models  # Ensure models are registered
 from core.cache import init_semantic_cache
 
 # APIRouters
-from api.routes import ingestion, graph, risk, auth
+from api.routes import ingestion, graph, risk, auth, stats
 
 # Rate Limiting
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -71,13 +71,13 @@ app.add_middleware(SlowAPIMiddleware)
 Instrumentator().instrument(app).expose(app)
 
 # CORS Middleware
-origins = settings.allowed_origins
-
+# We strictly load allowed origins from settings to prevent unauthorized access.
+# If allow_credentials is True, allow_origins cannot be ["*"].
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -86,6 +86,7 @@ app.include_router(auth.router)
 app.include_router(ingestion.router)
 app.include_router(graph.router)
 app.include_router(risk.router)
+app.include_router(stats.router)
 
 @app.get("/api/health")
 async def health_check():

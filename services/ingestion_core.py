@@ -8,6 +8,10 @@ from services.entity_resolution import resolve_supplier_name
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from core.telemetry import track_llm_performance
+from core.config import settings
+from core.prompt_loader import load_prompt
+from langchain_anthropic import ChatAnthropic
+from langchain_core.prompts import ChatPromptTemplate
 import pypdf
 
 async def process_pdf_and_extract(file_path: str) -> str:
@@ -22,17 +26,31 @@ async def process_pdf_and_extract(file_path: str) -> str:
         logger.error(f"PDF extraction failed: {e}")
         raise ValueError(f"Could not read PDF: {e}")
 
-@track_llm_performance(provider="Gemini/Anthropic", task_type="ContractExtraction")
-async def extract_contract_via_llm(contract_text: str):
-    # This function's implementation would typically involve calling an LLM
-    # to extract structured data from the contract_text.
-    # For now, we'll leave it as a placeholder.
-    raise NotImplementedError("LLM extraction logic not yet implemented.")
+def get_llm():
+    """Lazy initialization of the LLM to prevent import-time crashes if API keys are missing."""
+    return ChatAnthropic(
+        model="claude-3-sonnet-20240229", 
+        temperature=0, 
+        anthropic_api_key=settings.anthropic_api_key
+    )
+
+@track_llm_performance(provider="Anthropic", task_type="ContractExtraction")
+async def extract_contract_via_llm(raw_text: str) -> ContractData:
+    prompts = load_prompt("contract_extraction")
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", prompts["system_prompt"].strip()),
+        ("human", prompts["human_prompt"].strip())
+    ])
+    llm = get_llm()
+    chain = prompt | llm.with_structured_output(ContractData)
+    return await chain.ainvoke({"raw_text": raw_text})
 
 async def process_contract(
     contract: ContractData, 
     current_user: TokenData,
-    db_sql: AsyncSession
+    db_sql: AsyncSession,
+    ip_address: str = None
 ):
     # Entity Resolution: Resolve supplier name against existing graph nodes
     resolved_name = await resolve_supplier_name(contract.supplier.name)
@@ -59,7 +77,8 @@ async def process_contract(
             user_id=user.id, 
             action="ingest_contract", 
             target_node=contract.supplier.name,
-            new_value=json.dumps(contract.model_dump())
+            new_value=json.dumps(contract.model_dump()),
+            ip_address=ip_address
         )
         db_sql.add(audit)
     

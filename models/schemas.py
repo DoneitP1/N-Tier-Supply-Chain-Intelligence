@@ -68,15 +68,22 @@ class ERPBOMPayload(BaseModel):
 
 # --- Risk Engine Models ---
 class RiskSimulationRequest(BaseModel):
-    impacted_supplier_name: str
-    crisis_duration_days: int
+    supplier_name: str
+    duration_days: int
+    severity: str = "medium"
+
+class WeakestLink(BaseModel):
+    supplier: str
+    part: str
+    stock: int
+    lead_time: int
 
 class RiskSimulationResult(BaseModel):
-    impacted_paths: List[str]
-    tier_depth: int = Field(0, description="Depth of the supplier in the chain (0 = direct, 1 = tier-2, etc.)")
-    days_to_line_stoppage: Union[float, str]
-    risk_score: str
-    recommendations: str
+    cascading_impact_depth: int
+    impacted_factories: List[str]
+    total_impacted_nodes: int
+    bottlenecks: List[str]
+    weakest_links: List[WeakestLink]
 
 # --- Auth & User Models ---
 class UserBase(BaseModel):

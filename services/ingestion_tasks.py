@@ -9,13 +9,13 @@ from services.ingestion_core import process_pdf_and_extract, process_contract
 from sqlalchemy.future import select
 
 @celery_app.task(name="services.ingestion_tasks.process_document_task")
-def process_document_task(file_path: str, filename: str, user_id: int):
+def process_document_task(file_path: str, filename: str, user_id: int, ip_address: str = None):
     """
     Celery task to process uploaded PDFs asynchronously.
     """
-    return asyncio.run(process_document_async(file_path, filename, user_id))
+    return asyncio.run(process_document_async(file_path, filename, user_id, ip_address))
 
-async def process_document_async(file_path: str, filename: str, user_id: int):
+async def process_document_async(file_path: str, filename: str, user_id: int, ip_address: str = None):
     async with async_session() as db_sql:
         doc_meta = None
         try:
@@ -30,8 +30,8 @@ async def process_document_async(file_path: str, filename: str, user_id: int):
             # Process PDF
             contract_text = await process_pdf_and_extract(file_path)
             
-            # Note: We need extract_contract_via_llm here
-            from api.routes.ingestion import extract_contract_via_llm
+            # Implementation moved to ingestion_core
+            from services.ingestion_core import extract_contract_via_llm
             extracted_data = await extract_contract_via_llm(contract_text)
             
             # Use TokenData dummy for process_contract
@@ -42,7 +42,7 @@ async def process_document_async(file_path: str, filename: str, user_id: int):
             current_user = TokenData(username=user_obj.username, role=user_obj.role)
 
             # Refactored: process_contract now uses push_to_outbox internally
-            await process_contract(extracted_data, current_user, db_sql)
+            await process_contract(extracted_data, current_user, db_sql, ip_address=ip_address)
 
             if doc_meta:
                 doc_meta.status = "processed"

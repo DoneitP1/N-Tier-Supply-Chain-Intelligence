@@ -1,11 +1,12 @@
-from typing import List
-from models.schemas import RiskSimulationResult
+from typing import List, Optional, Set
+from models.schemas import RiskSimulationResult, WeakestLink
 
-async def simulate_risk_propagation(supplier_name: str, crisis_duration_days: int, db_connection) -> List[RiskSimulationResult]:
+async def simulate_risk_propagation(supplier_name: str, crisis_duration_days: int, db_connection) -> Optional[RiskSimulationResult]:
     """
     Simulates recursive risk propagation across N-Tier supplier paths.
     Traverses from the impacted supplier through any number of sub-suppliers
     until reaching a Part consumed by a Factory.
+    Aggregates results into a single comprehensive risk assessment.
     """
 
     # Recursive Cypher Query Logic:
@@ -27,75 +28,61 @@ async def simulate_risk_propagation(supplier_name: str, crisis_duration_days: in
     if not results:
         return None
         
-    simulations = []
+    impacted_factories = set()
+    impacted_nodes = set()
+    weakest_links = []
+    max_depth = 0
+    bottlenecks = set()
     
     for row in results:
         path_nodes = row.get("path_nodes", [])
         path_rels = row.get("path_rels", [])
-        factory = row.get("factory_name") or "Factory (Not Mapped)"
+        factory = row.get("factory_name")
         daily_consumption = row.get("daily_consumption")
         
-        # Build human-readable path and calculate depth
-        formatted_path = []
+        if factory:
+            impacted_factories.add(factory)
+            
+        # Track all unique nodes impacted
         for node in path_nodes:
-            label = list(node.labels)[0] if node.labels else "Unknown"
-            formatted_path.append(f"{label}: {node.get('name') or node.get('code')}")
-        if factory != "Factory (Not Mapped)":
-            formatted_path.append(f"Factory: {factory}")
+            # Using internal ID (element_id or id) as unique identifier
+            node_id = node.get("id") or node.element_id
+            impacted_nodes.add(node_id)
             
-        tier_depth = len(path_nodes) - 2 # Supplier (0) -> ... -> Part (N)
-        
-        # Risk Propagation Math:
-        # We look for the bottleneck (minimum days to stoppage) along the path
-        min_days_to_stoppage = float('inf')
-        bottleneck_reason = ""
-        overall_alt_allowed = True # Assumes safe unless a bottleneck has no alt
-        
+        tier_depth = len(path_nodes) - 1 # Depth of the chain
+        if tier_depth > max_depth:
+            max_depth = tier_depth
+            
         # Check each supply relationship in the path
-        for rel in path_rels:
+        for i, rel in enumerate(path_rels):
             m_stock = rel.get("minimum_stock_units")
-            # For Tier-N, we don't always have daily consumption at the edge,
-            # but we use the factory's consumption as a proxy for the entire chain impact.
-            if m_stock is not None and daily_consumption and daily_consumption > 0:
-                days = round(m_stock / daily_consumption, 1)
-                if days < min_days_to_stoppage:
-                    min_days_to_stoppage = days
-                    overall_alt_allowed = rel.get("alt_supplier_allowed", False)
-                    l_time = rel.get("lead_time_days", 0)
-                    bottleneck_reason = f"Bottleneck at {rel.type} (Stock: {m_stock}, Lead Time: {l_time})"
-
-        if min_days_to_stoppage == float('inf'):
-            days_to_stoppage = "Unknown"
-            risk_score = "Medium"
-            recommendations = "Incomplete supply chain mapping. Manual verification required."
-        else:
-            days_to_stoppage = min_days_to_stoppage
-            # Lead time of the immediate link
-            last_rel = path_rels[-1]
-            lead_time = last_rel.get("lead_time_days", 0)
+            l_time = rel.get("lead_time_days", 0)
             
-            if days_to_stoppage < lead_time and not overall_alt_allowed:
-                risk_score = "High"
-                recommendations = f"CRITICAL: Line stoppage in {days_to_stoppage} days. No alternative supplier for bottleneck."
-            elif days_to_stoppage < lead_time and overall_alt_allowed:
-                risk_score = "Medium"
-                recommendations = f"WARNING: Potential stoppage in {days_to_stoppage} days. Activate alternative sourcing."
-            else:
-                risk_score = "Low"
-                recommendations = f"Buffer levels sufficient ({days_to_stoppage} days) for currently mapped lead times."
+            # Identify weakest links and bottlenecks
+            if m_stock is not None and daily_consumption and daily_consumption > 0:
+                days_coverage = m_stock / daily_consumption
+                if days_coverage < crisis_duration_days or days_coverage < l_time:
+                    # This is a weak link
+                    supplier_node = path_nodes[i]
+                    part_node = path_nodes[i+1]
+                    
+                    link = WeakestLink(
+                        supplier=supplier_node.get("name") or "Unknown Supplier",
+                        part=part_node.get("name") or part_node.get("code") or "Unknown Part",
+                        stock=int(m_stock),
+                        lead_time=int(l_time)
+                    )
+                    
+                    # Avoid duplicates in weakest links
+                    link_key = (link.supplier, link.part)
+                    if not any(l.supplier == link.supplier and l.part == link.part for l in weakest_links):
+                        weakest_links.append(link)
+                        bottlenecks.add(f"Low stock for {link.part} at {link.supplier}")
 
-        # Crisis duration override
-        if isinstance(days_to_stoppage, (int, float)) and crisis_duration_days > days_to_stoppage:
-            if risk_score != "High":
-                risk_score = "High"
-                recommendations += f" Crisis duration ({crisis_duration_days}d) exceeds coverage."
-
-        simulations.append(RiskSimulationResult(
-            impacted_paths=formatted_path,
-            tier_depth=tier_depth,
-            days_to_line_stoppage=days_to_stoppage,
-            risk_score=risk_score,
-            recommendations=recommendations
-        ))
-        
-    return simulations
+    return RiskSimulationResult(
+        cascading_impact_depth=max_depth,
+        impacted_factories=list(impacted_factories),
+        total_impacted_nodes=len(impacted_nodes),
+        bottlenecks=list(bottlenecks),
+        weakest_links=weakest_links
+    )

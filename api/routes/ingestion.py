@@ -1,19 +1,17 @@
 import os
 import shutil
 from typing import List
-from fastapi import APIRouter, HTTPException, status, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Depends, Request
 from core.database import db, logger
 from core.config import settings
 from core.postgres import get_db
 from core.security import RoleChecker, get_current_user
 from services.news_monitor import extract_news_risk_via_llm
 from services.erp_integration import ingest_erp_bom
-from langchain_anthropic import ChatAnthropic
-from langchain_core.prompts import ChatPromptTemplate
 from models.schemas import ContractData, RawTextPayload, ERPBOMPayload, NewsRiskData, TokenData
 from models.pg_models import AuditLog, DocumentMetadata, User as DBUser
 from services.ingestion_tasks import process_document_task
-from services.ingestion_core import process_pdf_and_extract, process_contract
+from services.ingestion_core import process_pdf_and_extract, process_contract, extract_contract_via_llm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -25,27 +23,10 @@ router = APIRouter(prefix="/api/ingest", tags=["Ingestion"])
 admin_only = RoleChecker(["admin"])
 analyst_or_admin = RoleChecker(["analyst", "admin"])
 
-def get_llm():
-    """Lazy initialization of the LLM to prevent import-time crashes if API keys are missing."""
-    return ChatAnthropic(
-        model="claude-3-sonnet-20240229", 
-        temperature=0, 
-        anthropic_api_key=settings.anthropic_api_key
-    )
-
-async def extract_contract_via_llm(raw_text: str) -> ContractData:
-    prompts = load_prompt("contract_extraction")
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", prompts["system_prompt"].strip()),
-        ("human", prompts["human_prompt"].strip())
-    ])
-    llm = get_llm()
-    chain = prompt | llm.with_structured_output(ContractData)
-    return await chain.ainvoke({"raw_text": raw_text})
 
 @router.post("/process-contract", status_code=status.HTTP_201_CREATED)
 async def process_contract_route(
+    request: Request,
     contract: ContractData, 
     current_user: TokenData = Depends(get_current_user),
     db_sql: AsyncSession = Depends(get_db)
@@ -54,13 +35,14 @@ async def process_contract_route(
         raise HTTPException(status_code=422, detail="Extraction confidence too low. Requires manual review.")
 
     try:
-        return await process_contract(contract, current_user, db_sql)
+        return await process_contract(contract, current_user, db_sql, ip_address=request.client.host)
     except Exception as e:
         logger.error(f"Failed to map contract to Neo4j: {e}")
         raise HTTPException(status_code=500, detail="Database mapping failed")
 
 @router.post("/process-news", status_code=status.HTTP_201_CREATED)
 async def process_news(
+    request: Request,
     news: NewsRiskData, 
     current_user: TokenData = Depends(get_current_user),
     db_sql: AsyncSession = Depends(get_db)
@@ -90,7 +72,8 @@ async def process_news(
                     user_id=user.id, 
                     action="ingest_news", 
                     target_node=news.event_classification.event_type,
-                    new_value=json.dumps(news.model_dump())
+                    new_value=json.dumps(news.model_dump()),
+                    ip_address=request.client.host
                 )
                 db_sql.add(audit)
         
@@ -104,12 +87,20 @@ async def process_news(
 
 @router.post("/upload-contract", status_code=status.HTTP_201_CREATED)
 async def upload_pdf(
+    request: Request,
     file: UploadFile = File(...), 
     current_user: TokenData = Depends(admin_only),
     db_sql: AsyncSession = Depends(get_db)
 ):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
+        
+    # Check file size
+    if file.size > settings.max_upload_size_mb * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size allowed is {settings.max_upload_size_mb}MB."
+        )
         
     # Persistent temp path for the worker to pick up
     temp_dir = "/tmp/ntier_uploads"
@@ -130,7 +121,7 @@ async def upload_pdf(
         await db_sql.refresh(doc_meta)
 
         # Trigger Celery Task instead of inline processing
-        process_document_task.delay(temp_path, file.filename, user.id)
+        process_document_task.delay(temp_path, file.filename, user.id, ip_address=request.client.host)
         
         return {"message": "Document uploaded and queued for processing", "filename": file.filename}
         
@@ -166,6 +157,7 @@ async def get_ingestion_history(
 
 @router.post("/analyze-raw-text", status_code=status.HTTP_200_OK)
 async def analyze_raw_text(
+    request: Request,
     payload: RawTextPayload, 
     current_user: TokenData = Depends(admin_only),
     db_sql: AsyncSession = Depends(get_db)
@@ -174,15 +166,17 @@ async def analyze_raw_text(
     raw_text = payload.text.strip()
     if raw_text.startswith("[TYPE: CONTRACT_PDF]"):
         extracted_data = await extract_contract_via_llm(raw_text)
-        return await process_contract(extracted_data, current_user, db_sql)
+        return await process_contract(extracted_data, current_user, db_sql, ip_address=request.client.host)
     elif raw_text.startswith("[TYPE: NEWS_FEED]"):
         extracted_data = await extract_news_risk_via_llm(raw_text)
-        return await process_news(extracted_data, current_user=current_user, db_sql=db_sql)
+        # Note: process_news also needs request for its inline audit log
+        return await process_news(request, extracted_data, current_user=current_user, db_sql=db_sql)
     else:
         raise HTTPException(status_code=400, detail="Unknown input format. Use [TYPE: ...] tags.")
 
 @router.post("/erp-bom", status_code=status.HTTP_201_CREATED)
 async def map_erp_bom(
+    request: Request,
     payload: ERPBOMPayload, 
     current_user: TokenData = Depends(admin_only),
     db_sql: AsyncSession = Depends(get_db)
@@ -200,7 +194,8 @@ async def map_erp_bom(
                 user_id=user.id, 
                 action="ingest_erp_bom", 
                 target_node=payload.factory,
-                new_value=json.dumps(payload.model_dump())
+                new_value=json.dumps(payload.model_dump()),
+                ip_address=request.client.host
             )
             db_sql.add(audit)
         

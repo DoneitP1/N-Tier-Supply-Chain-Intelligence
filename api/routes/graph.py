@@ -56,3 +56,32 @@ async def get_graph_data(limit: int = Query(200, description="Limit max relation
     except Exception as e:
         logger.error(f"Error retrieving graph data: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/nodes", status_code=status.HTTP_200_OK, dependencies=[Depends(analyst_or_admin)])
+async def get_nodes(label: Optional[str] = Query(None, description="Filter nodes by label (e.g., Supplier)")):
+    """
+    Fetches nodes, optionally filtered by label.
+    """
+    try:
+        if label:
+            # Using elementId() for modern Neo4j compatibility
+            query = f"MATCH (n:{label}) RETURN elementId(n) AS id, labels(n)[0] AS label, coalesce(n.name, n.code, n.type, 'Unknown') AS name"
+        else:
+            query = "MATCH (n) RETURN elementId(n) AS id, labels(n)[0] AS label, coalesce(n.name, n.code, n.type, 'Unknown') AS name"
+        
+        results = await db.execute_query(query)
+        # Ensure we return a list of objects that the frontend expects
+        return [
+            {
+                "id": row["id"], 
+                "label": row["label"] or (label if label else "Unknown"), 
+                "name": row["name"]
+            } for row in results
+        ]
+    except Exception as e:
+        logger.error(f"Error retrieving nodes for label '{label}': {str(e)}", exc_info=True)
+        # Provide a more helpful error message
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to retrieve {label if label else 'graph'} nodes from database."
+        )

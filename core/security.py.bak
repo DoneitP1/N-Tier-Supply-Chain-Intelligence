@@ -33,27 +33,12 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
     return encoded_jwt
 
-def create_refresh_token(data: dict) -> str:
-    """Generate a JWT refresh token."""
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
-    to_encode.update({"exp": expire, "type": "refresh"})
-    return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
-
-from fastapi import Request
-
-async def get_current_user(request: Request) -> TokenData:
-    token = request.cookies.get("access_token")
-    
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Cookie"},
+        headers={"WWW-Authenticate": "Bearer"},
     )
-    
-    if not token:
-        raise credentials_exception
-        
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         username: str = payload.get("sub")

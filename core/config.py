@@ -21,10 +21,12 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     
     # Application Security
-    app_api_key: str = "super_secret_dev_key"
-    secret_key: str = "a_very_secret_key_change_me_in_production"
+    app_api_key: str = "dev_key_only" # MUST be overridden in production
+    secret_key: str = "dev_secret_only" # MUST be overridden in production
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+    max_upload_size_mb: int = 10
     
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
