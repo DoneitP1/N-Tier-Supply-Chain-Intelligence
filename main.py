@@ -29,7 +29,8 @@ async def create_db_constraints():
     constraints = [
         "CREATE CONSTRAINT IF NOT EXISTS FOR (s:Supplier) REQUIRE s.name IS UNIQUE",
         "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Part) REQUIRE p.code IS UNIQUE",
-        "CREATE CONSTRAINT IF NOT EXISTS FOR (f:Factory) REQUIRE f.name IS UNIQUE"
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (f:Factory) REQUIRE f.name IS UNIQUE",
+        "CREATE FULLTEXT INDEX supplierNameIndex IF NOT EXISTS FOR (n:Supplier) ON EACH [n.name]"
     ]
     for cypher in constraints:
         try:
