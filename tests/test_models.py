@@ -21,9 +21,14 @@ def test_contract_data_validation():
         )
 
 def test_risk_simulation_request():
-    req = RiskSimulationRequest(impacted_supplier_name="Bursa Parts", crisis_duration_days=14)
-    assert req.impacted_supplier_name == "Bursa Parts"
-    assert req.crisis_duration_days == 14
+    req = RiskSimulationRequest(
+        supplier_name="Bursa Parts", 
+        duration_days=14,
+        severity="Medium"
+    )
+    assert req.supplier_name == "Bursa Parts"
+    assert req.duration_days == 14
+    assert req.severity == "Medium"
     
     # Test typing validation
     with pytest.raises(ValidationError):

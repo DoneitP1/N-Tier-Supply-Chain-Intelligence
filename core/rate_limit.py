@@ -16,6 +16,9 @@ def rate_limit(requests: int, window: int):
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
+            if not settings.rate_limit_enabled:
+                return await func(*args, **kwargs)
+
             # Try to find the request object in kwargs or args
             request = kwargs.get("request")
             if not request:

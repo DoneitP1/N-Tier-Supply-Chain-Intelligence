@@ -26,7 +26,13 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    cookie_secure: bool = False
     max_upload_size_mb: int = 10
+    graph_max_nodes: int = 200
+    risk_simulation_depth: int = 5
+    
+    # Rate Limiting
+    rate_limit_enabled: bool = True
     
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]

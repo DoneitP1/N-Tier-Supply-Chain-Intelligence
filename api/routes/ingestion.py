@@ -1,7 +1,7 @@
 import os
 import shutil
-from typing import List
-from fastapi import APIRouter, HTTPException, status, UploadFile, File, Depends, Request
+from typing import List, Dict, Any
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Depends, Request, Query
 from core.database import db, logger
 from core.config import settings
 from core.postgres import get_db
@@ -14,6 +14,10 @@ from services.ingestion_tasks import process_document_task
 from services.ingestion_core import process_pdf_and_extract, process_contract, extract_contract_via_llm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+import redis.asyncio as redis
 
 from core.prompt_loader import load_prompt
 
@@ -24,7 +28,7 @@ admin_only = RoleChecker(["admin"])
 analyst_or_admin = RoleChecker(["analyst", "admin"])
 
 
-@router.post("/process-contract", status_code=status.HTTP_201_CREATED)
+@router.post("/process-contract", status_code=status.HTTP_201_CREATED, summary="Process contract from extraction data", description="Takes extracted contract data (Supplier, Parts, Clauses) and maps it to the Neo4j Knowledge Graph.")
 async def process_contract_route(
     request: Request,
     contract: ContractData, 
@@ -40,7 +44,7 @@ async def process_contract_route(
         logger.error(f"Failed to map contract to Neo4j: {e}")
         raise HTTPException(status_code=500, detail="Database mapping failed")
 
-@router.post("/process-news", status_code=status.HTTP_201_CREATED)
+@router.post("/process-news", status_code=status.HTTP_201_CREATED, summary="Process news risk event", description="Queues a news risk event for ingestion into the Knowledge Graph via the Outbox pattern.")
 async def process_news(
     request: Request,
     news: NewsRiskData, 
@@ -85,7 +89,7 @@ async def process_news(
         logger.error(f"Failed to queue news for Neo4j: {e}")
         raise HTTPException(status_code=500, detail="Database queuing failed")
 
-@router.post("/upload-contract", status_code=status.HTTP_201_CREATED)
+@router.post("/upload-contract", status_code=status.HTTP_201_CREATED, summary="Upload and process PDF contract", description="Uploads a PDF, extracts text via vision/OCR, and triggers an asynchronous task to ingestion the contract into the graph.")
 async def upload_pdf(
     request: Request,
     file: UploadFile = File(...), 
@@ -131,31 +135,97 @@ async def upload_pdf(
             os.remove(temp_path)
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/history", response_model=List[dict], dependencies=[Depends(analyst_or_admin)])
+@router.get("/history", response_model=Dict[str, Any], dependencies=[Depends(analyst_or_admin)], summary="Get ingestion history", description="Retrieves a paginated list of document ingestion events for the currently logged-in user.")
 async def get_ingestion_history(
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     current_user: TokenData = Depends(get_current_user),
     db_sql: AsyncSession = Depends(get_db)
 ):
-    """Retrieves history of uploaded documents for the current user."""
+    """Retrieves history of uploaded documents for the current user with pagination."""
     user_res = await db_sql.execute(select(DBUser).filter(DBUser.username == current_user.username))
     user = user_res.scalars().first()
     
     if not user:
-        return []
+        return {"items": [], "total": 0}
         
-    res = await db_sql.execute(select(DocumentMetadata).filter(DocumentMetadata.user_id == user.id).order_by(DocumentMetadata.id.desc()))
+    # Get total count
+    from sqlalchemy import func
+    count_res = await db_sql.execute(select(func.count()).select_from(DocumentMetadata).filter(DocumentMetadata.user_id == user.id))
+    total = count_res.scalar()
+
+    # Get paginated records
+    res = await db_sql.execute(
+        select(DocumentMetadata)
+        .filter(DocumentMetadata.user_id == user.id)
+        .order_by(DocumentMetadata.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     docs = res.scalars().all()
     
-    return [
-        {
-            "id": d.id,
-            "filename": d.filename,
-            "status": d.status,
-            "created_at": d.created_at.isoformat() if d.created_at else None
-        } for d in docs
-    ]
+    return {
+        "items": [
+            {
+                "id": d.id,
+                "filename": d.filename,
+                "status": d.status,
+                "created_at": d.created_at.isoformat() if d.created_at else None
+            } for d in docs
+        ],
+        "total": total
+    }
 
-@router.post("/analyze-raw-text", status_code=status.HTTP_200_OK)
+@router.get("/events", summary="Stream ingestion events", description="Server-Sent Events (SSE) endpoint to receive real-time notifications about ongoing ingestion tasks.")
+async def ingestion_events(
+    request: Request,
+    current_user: TokenData = Depends(analyst_or_admin),
+    db_sql: AsyncSession = Depends(get_db)
+):
+    """
+    SSE endpoint to stream ingestion status updates.
+    """
+    # Fetch user ID for the channel name
+    user_res = await db_sql.execute(select(DBUser).filter(DBUser.username == current_user.username))
+    user = user_res.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    async def event_generator():
+        redis_client = redis.from_url(settings.redis_url)
+        pubsub = redis_client.pubsub()
+        channel = f"ingestion_updates:{user.id}"
+        await pubsub.subscribe(channel)
+        
+        try:
+            # Yield initial connection event
+            yield {
+                "event": "connected",
+                "data": json.dumps({"message": "Connected to ingestion updates"})
+            }
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message:
+                    yield {
+                        "event": "update",
+                        "data": message["data"].decode("utf-8")
+                    }
+                await asyncio.sleep(0.1) # Small sleep to prevent CPU spinning
+        finally:
+            await pubsub.unsubscribe(channel)
+            await redis_client.close()
+
+    async def sse_wrapper():
+        async for event in event_generator():
+            yield f"event: {event['event']}\ndata: {event['data']}\n\n"
+
+    return StreamingResponse(sse_wrapper(), media_type="text/event-stream")
+
+@router.post("/analyze-raw-text", status_code=status.HTTP_200_OK, summary="Analyze tagged raw text", description="Analyzes raw text input containing [TYPE: ...] tags to automatically route to contract or news extraction logic.")
 async def analyze_raw_text(
     request: Request,
     payload: RawTextPayload, 
@@ -174,7 +244,7 @@ async def analyze_raw_text(
     else:
         raise HTTPException(status_code=400, detail="Unknown input format. Use [TYPE: ...] tags.")
 
-@router.post("/erp-bom", status_code=status.HTTP_201_CREATED)
+@router.post("/erp-bom", status_code=status.HTTP_201_CREATED, summary="Import ERP Bill of Materials", description="Imports structured BOM data from ERP systems to build the N-Tier supply chain relationships in the Knowledge Graph.")
 async def map_erp_bom(
     request: Request,
     payload: ERPBOMPayload, 

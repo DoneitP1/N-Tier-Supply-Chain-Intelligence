@@ -1,5 +1,6 @@
 from typing import List, Optional, Set
 from models.schemas import RiskSimulationResult, WeakestLink
+from core.config import settings
 
 async def simulate_risk_propagation(supplier_name: str, crisis_duration_days: int, db_connection) -> Optional[RiskSimulationResult]:
     """
@@ -13,8 +14,8 @@ async def simulate_risk_propagation(supplier_name: str, crisis_duration_days: in
     # 1. MATCH the target Supplier.
     # 2. Use variable-length path [:SUPPLIES*] to find all downstream impacts.
     # 3. Terminate at (p:Part) which is consumed by (f:Factory).
-    query = """
-    MATCH path = (s:Supplier {name: $supplier_name})-[:SUPPLIES*1..5]->(p:Part)
+    query = f"""
+    MATCH path = (s:Supplier {{name: $supplier_name}})-[:SUPPLIES*1..{settings.risk_simulation_depth}]->(p:Part)
     OPTIONAL MATCH (p)<-[con:CONSUMES]-(f:Factory)
     RETURN 
         nodes(path) AS path_nodes,

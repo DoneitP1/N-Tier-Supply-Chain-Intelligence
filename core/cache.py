@@ -1,10 +1,11 @@
 import logging
-from langchain_core.globals import set_llm_cache
-from langchain_community.cache import RedisSemanticCache
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from typing import Any, Optional
+import redis
+import json
 from core.config import settings
 
 logger = logging.getLogger("ntier_cache")
+redis_client = redis.from_url(settings.redis_url, decode_responses=True)
 
 def init_semantic_cache():
     """
@@ -34,3 +35,29 @@ def init_semantic_cache():
         logger.error(f"Failed to initialize semantic cache: {e}")
 
 # Note: We call this in main.py lifespan
+
+async def set_cache(key: str, value: Any, expire: int = 3600):
+    """Sets a value in Redis cache."""
+    try:
+        redis_client.setex(key, expire, json.dumps(value))
+    except Exception as e:
+        logger.error(f"Cache set error: {e}")
+
+async def get_cache(key: str) -> Optional[Any]:
+    """Gets a value from Redis cache."""
+    try:
+        data = redis_client.get(key)
+        return json.loads(data) if data else None
+    except Exception as e:
+        logger.error(f"Cache get error: {e}")
+        return None
+
+async def delete_cache_pattern(pattern: str):
+    """Deletes all keys matching a pattern."""
+    try:
+        keys = redis_client.keys(pattern)
+        if keys:
+            redis_client.delete(*keys)
+            logger.info(f"Invalidated cache for pattern: {pattern}")
+    except Exception as e:
+        logger.error(f"Cache invalidation error: {e}")

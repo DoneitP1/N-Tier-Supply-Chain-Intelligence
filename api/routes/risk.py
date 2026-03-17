@@ -10,7 +10,7 @@ analyst_or_admin = RoleChecker(["analyst", "admin"])
 
 router = APIRouter(prefix="/api/risk", tags=["Risk Simulation"])
 
-@router.post("/simulate", status_code=status.HTTP_200_OK, response_model=RiskSimulationResult, dependencies=[Depends(analyst_or_admin)])
+@router.post("/simulate", status_code=status.HTTP_200_OK, response_model=RiskSimulationResult, dependencies=[Depends(analyst_or_admin)], summary="Simulate supply chain risk", description="Performs recursive traversal from an impacted supplier to detect bottlenecks and cascading factory impacts.")
 async def simulate_risk(payload: RiskSimulationRequest):
     """
     Simulates risk propagation through the Knowledge Graph.

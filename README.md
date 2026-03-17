@@ -29,7 +29,7 @@ Analyzes supply chain disruptions up to 5 tiers deep. Uses Cypher recursive quer
 ### 3. Professional Observability
 Integrated Prometheus metrics tracking API response times, ingestion success rates, and LLM token usage, visualized through Grafana dashboards.
 
-## 🛠 Getting Started
+## ⚒️ Getting Started
 
 ### Prerequisites
 - Docker & Docker Compose
@@ -37,11 +37,10 @@ Integrated Prometheus metrics tracking API response times, ingestion success rat
 
 ### Installation
 1. Clone the repository.
-2. Create a `.env` file in the root:
-   ```env
-   ANTHROPIC_API_KEY=your_key_here
-   NEO4J_PASSWORD=password
-   POSTGRES_PASSWORD=password
+2. Setup environment variables:
+   ```bash
+   cp .env.example .env
+   # Edit .env and add your API keys
    ```
 3. Spin up the infrastructure:
    ```bash
@@ -49,8 +48,14 @@ Integrated Prometheus metrics tracking API response times, ingestion success rat
    ```
 4. Access the platforms:
    - **Frontend**: `http://localhost:3000`
-   - **API Docs**: `http://localhost:8000/docs`
+   - **API Docs (Swagger)**: `http://localhost:8000/docs`
    - **Grafana**: `http://localhost:3001` (Admin/admin)
+
+## 📚 Documentation
+For deeper technical details, please refer to:
+- [Architecture & Math Logic](file:///Users/29emirhanerturk/Desktop/🫩/N-Tier/docs/architecture.md): Bottleneck formulas and Entity Resolution rationale.
+- [Operations & Recovery](file:///Users/29emirhanerturk/Desktop/🫩/N-Tier/docs/operations.md): Outbox manual recovery and troubleshooting.
+- [API Reference](http://localhost:8000/docs): Comprehensive OpenAPI specifications.
 
 ## 🏗 Architecture Analysis
 The project follows a clean, layered architecture:

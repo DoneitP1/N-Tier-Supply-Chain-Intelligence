@@ -18,7 +18,7 @@ async def get_db_user(db: AsyncSession, username: str):
     result = await db.execute(select(DBUser).filter(DBUser.username == username))
     return result.scalars().first()
 
-@router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED, summary="Register a new user", description="Creates a new user in the PostgreSQL database with the specified role (admin or analyst).")
 async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     # Check if user already exists
     if await get_db_user(db, user_in.username):
@@ -46,7 +46,7 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
         await db.rollback()
         raise HTTPException(status_code=500, detail="Registration failed")
 
-@router.post("/token")
+@router.post("/token", summary="Login for access token", description="Authenticates user and returns JWT access and refresh tokens via HTTP-only cookies.")
 @rate_limit(requests=10, window=60)
 async def login_for_access_token(
     request: Request,
@@ -76,7 +76,7 @@ async def login_for_access_token(
         httponly=True,
         max_age=settings.access_token_expire_minutes * 60,
         samesite="lax",
-        secure=True, 
+        secure=settings.cookie_secure, 
     )
     response.set_cookie(
         key="refresh_token",
@@ -84,12 +84,12 @@ async def login_for_access_token(
         httponly=True,
         max_age=settings.refresh_token_expire_days * 24 * 60 * 60,
         samesite="lax",
-        secure=True,
+        secure=settings.cookie_secure,
     )
     
     return {"status": "success", "message": "Logged in successfully"}
 
-@router.post("/refresh")
+@router.post("/refresh", summary="Refresh access token", description="Issues a new access token using a valid refresh token stored in cookies.")
 async def refresh_access_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
@@ -114,19 +114,19 @@ async def refresh_access_token(request: Request, response: Response, db: AsyncSe
             httponly=True,
             max_age=settings.access_token_expire_minutes * 60,
             samesite="lax",
-            secure=True,
+            secure=settings.cookie_secure,
         )
         return {"status": "success", "message": "Token refreshed"}
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-@router.post("/logout")
+@router.post("/logout", summary="Logout user", description="Clears authentication cookies (access_token and refresh_token).")
 async def logout(response: Response):
     response.delete_cookie("access_token")
     response.delete_cookie("refresh_token")
     return {"status": "success", "message": "Logged out successfully"}
 
-@router.get("/me", response_model=TokenData)
+@router.get("/me", response_model=TokenData, summary="Get current user", description="Returns details of the currently authenticated user based on the JWT cookie.")
 async def read_users_me(current_user: TokenData = Depends(get_current_user)):
     """
     Returns the current authenticated user's profile.

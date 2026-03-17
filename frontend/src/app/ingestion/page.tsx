@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { Upload, FileText, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Upload, FileText, CheckCircle, XCircle, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import DashboardLayout from '@/components/layout/DashboardLayout';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -21,20 +21,53 @@ export default function IngestionPage() {
   const [rawText, setRawText] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [activeTab, setActiveTab] = useState<'upload' | 'raw'>('upload');
+  
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const limit = 10;
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     try {
-      const response = await api.get('/api/ingest/history');
-      setHistory(response.data);
+      const offset = (page - 1) * limit;
+      const response = await api.get(`/api/ingest/history?limit=${limit}&offset=${offset}`);
+      setHistory(response.data.items);
+      setTotal(response.data.total);
     } catch (err) {
       console.error("Failed to fetch ingestion history");
     }
-  };
+  }, [page]);
 
   useEffect(() => {
     fetchHistory();
-    const interval = setInterval(fetchHistory, 5000); // Poll for status changes
-    return () => clearInterval(interval);
+
+    // SSE for real-time updates
+    const eventSource = new EventSource(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/ingest/events`, {
+      withCredentials: true
+    });
+
+    eventSource.addEventListener('update', (event) => {
+      const data = JSON.parse(event.data);
+      setHistory(prev => {
+        const index = prev.findIndex(item => item.id === data.id);
+        if (index !== -1) {
+          const newHistory = [...prev];
+          newHistory[index] = { ...newHistory[index], status: data.status };
+          return newHistory;
+        } else {
+          return [data, ...prev];
+        }
+      });
+    });
+
+    eventSource.onerror = (err) => {
+      console.error("SSE Connection Error:", err);
+      eventSource.close();
+    };
+
+    return () => {
+      eventSource.close();
+    };
   }, []);
 
   const handleUpload = async (e: React.FormEvent) => {
@@ -223,6 +256,31 @@ export default function IngestionPage() {
                 </tbody>
               </table>
             </div>
+            
+            {/* Pagination Controls */}
+            {total > limit && (
+              <div className="bg-[#111113] border-t border-[#1e293b] px-6 py-4 flex items-center justify-between">
+                <div className="text-xs text-slate-500">
+                  Showing <span className="text-white">{(page - 1) * limit + 1}</span> to <span className="text-white">{Math.min(page * limit, total)}</span> of <span className="text-white">{total}</span>
+                </div>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="p-2 bg-[#1e293b] hover:bg-[#2d3a4f] text-white rounded-lg disabled:opacity-30 transition-all"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <button
+                    onClick={() => setPage(p => Math.min(Math.ceil(total / limit), p + 1))}
+                    disabled={page >= Math.ceil(total / limit)}
+                    className="p-2 bg-[#1e293b] hover:bg-[#2d3a4f] text-white rounded-lg disabled:opacity-30 transition-all"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

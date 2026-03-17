@@ -3,18 +3,25 @@ from fastapi import APIRouter, HTTPException, status, Depends, Query
 from core.security import RoleChecker, get_current_user
 from models.schemas import TokenData
 from core.database import db, logger
+from core.config import settings
+from core.cache import get_cache, set_cache
 
 # RBAC Dependencies
 analyst_or_admin = RoleChecker(["analyst", "admin"])
 
 router = APIRouter(prefix="/api/graph", tags=["Graph Visualization"])
 
-@router.get("/data", status_code=status.HTTP_200_OK, dependencies=[Depends(analyst_or_admin)])
-async def get_graph_data(limit: int = Query(200, description="Limit max relationships evaluated to prevent UI freeze")):
+@router.get("/data", status_code=status.HTTP_200_OK, dependencies=[Depends(analyst_or_admin)], summary="Get full graph data", description="Fetches all nodes and edges for visualization, using Redis caching for high performance.")
+async def get_graph_data(limit: int = Query(default=settings.graph_max_nodes, description="Limit max relationships evaluated to prevent UI freeze")):
     """
     Fetches Knowledge Graph nodes and edges for visualization with a hard limit on relationships
     to prevent overwhelming the neo4j engine and the browser.
     """
+    cache_key = f"graph_data:limit:{limit}"
+    cached_data = await get_cache(cache_key)
+    if cached_data:
+        return cached_data
+
     query = """
     MATCH (n)-[r]->(m)
     RETURN 
@@ -52,12 +59,15 @@ async def get_graph_data(limit: int = Query(200, description="Limit max relation
                 "type": row.get("r_type", "RELATED")
             })
             
-        return {"nodes": list(nodes_dict.values()), "edges": edges}
+        graph_response = {"nodes": list(nodes_dict.values()), "edges": edges}
+        # Cache for 1 hour by default
+        await set_cache(cache_key, graph_response, expire=3600)
+        return graph_response
     except Exception as e:
         logger.error(f"Error retrieving graph data: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/nodes", status_code=status.HTTP_200_OK, dependencies=[Depends(analyst_or_admin)])
+@router.get("/nodes", status_code=status.HTTP_200_OK, dependencies=[Depends(analyst_or_admin)], summary="Get filtered nodes", description="Retrieves list of nodes, optionally filtered by Neo4j label (e.g. Supplier, Part).")
 async def get_nodes(label: Optional[str] = Query(None, description="Filter nodes by label (e.g., Supplier)")):
     """
     Fetches nodes, optionally filtered by label.

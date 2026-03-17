@@ -40,5 +40,6 @@ class OutboxEvent(Base):
     payload = Column(String, nullable=False) # JSON payload
     status = Column(String, default="pending") # pending, processed, failed
     retries = Column(Integer, default=0)
+    next_retry_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     processed_at = Column(DateTime(timezone=True), nullable=True)

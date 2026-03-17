@@ -3,7 +3,11 @@ import asyncio
 from core.celery_app import celery_app
 from core.database import db, logger
 from core.postgres import async_session
+from core.config import settings
+from core.cache import delete_cache_pattern
 from models.pg_models import AuditLog, DocumentMetadata, User as DBUser
+import redis
+import json
 from services.news_monitor import extract_news_risk_via_llm
 from services.ingestion_core import process_pdf_and_extract, process_contract
 from sqlalchemy.future import select
@@ -47,6 +51,18 @@ async def process_document_async(file_path: str, filename: str, user_id: int, ip
             if doc_meta:
                 doc_meta.status = "processed"
                 await db_sql.commit()
+                
+                # Notify via Redis
+                r = redis.from_url(settings.redis_url)
+                r.publish(f"ingestion_updates:{user_id}", json.dumps({
+                    "id": doc_meta.id,
+                    "filename": filename,
+                    "status": "processed",
+                    "created_at": doc_meta.created_at.isoformat() if doc_meta.created_at else None
+                }))
+                
+                # Invalidate graph cache
+                await delete_cache_pattern("graph_data:*")
             
             logger.info(f"Successfully processed document: {filename}")
 
@@ -55,6 +71,15 @@ async def process_document_async(file_path: str, filename: str, user_id: int, ip
             if doc_meta:
                 doc_meta.status = "failed"
                 await db_sql.commit()
+                
+                # Notify via Redis
+                r = redis.from_url(settings.redis_url)
+                r.publish(f"ingestion_updates:{user_id}", json.dumps({
+                    "id": doc_meta.id,
+                    "filename": filename,
+                    "status": "failed",
+                    "created_at": doc_meta.created_at.isoformat() if doc_meta.created_at else None
+                }))
         finally:
             if os.path.exists(file_path):
                 os.remove(file_path)
@@ -72,7 +97,15 @@ async def process_outbox_async():
     from datetime import datetime
     
     async with async_session() as db_sql:
-        res = await db_sql.execute(select(OutboxEvent).filter(OutboxEvent.status == "pending").limit(50))
+        # Only pick up pending events that are due for retry
+        res = await db_sql.execute(
+            select(OutboxEvent)
+            .filter(
+                OutboxEvent.status == "pending",
+                (OutboxEvent.next_retry_at == None) | (OutboxEvent.next_retry_at <= datetime.now())
+            )
+            .limit(50)
+        )
         events = res.scalars().all()
         
         for event in events:
@@ -90,11 +123,20 @@ async def process_outbox_async():
                 
                 event.status = "processed"
                 event.processed_at = datetime.now()
+                
+                # Invalidate graph cache if anything changed
+                await delete_cache_pattern("graph_data:*")
             except Exception as e:
                 logger.error(f"Failed to process outbox event {event.id}: {e}")
                 event.retries += 1
                 if event.retries > 5:
                     event.status = "failed"
+                else:
+                    # Exponential backoff: 30s, 60s, 120s, 240s, 480s
+                    from datetime import timedelta
+                    delay_seconds = 30 * (2 ** (event.retries - 1))
+                    event.next_retry_at = datetime.now() + timedelta(seconds=delay_seconds)
+                    logger.info(f"Scheduled retry for event {event.id} in {delay_seconds}s at {event.next_retry_at}")
             await db_sql.commit()
 
 async def _sync_contract_to_neo4j(params: dict):

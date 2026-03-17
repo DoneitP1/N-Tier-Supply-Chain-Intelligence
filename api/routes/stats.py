@@ -7,7 +7,7 @@ analyst_or_admin = RoleChecker(["analyst", "admin"])
 
 router = APIRouter(prefix="/api/stats", tags=["Dashboard Statistics"])
 
-@router.get("", status_code=status.HTTP_200_OK, dependencies=[Depends(analyst_or_admin)])
+@router.get("", status_code=status.HTTP_200_OK, dependencies=[Depends(analyst_or_admin)], summary="Get dashboard summary stats", description="Calculates real-time supply chain health, total entities, and active risks for the dashboard.")
 async def get_dashboard_stats():
     """
     Fetches real-time statistics for the dashboard.

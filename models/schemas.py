@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal
 from pydantic import BaseModel, Field
 
 # --- Contract & General Models ---
@@ -88,7 +88,7 @@ class RiskSimulationResult(BaseModel):
 # --- Auth & User Models ---
 class UserBase(BaseModel):
     username: str
-    role: str = Field("analyst", description="Role of the user: admin or analyst")
+    role: Literal["admin", "analyst"] = Field("analyst", description="Role of the user: admin or analyst")
 
 class UserCreate(UserBase):
     password: str
@@ -105,4 +105,4 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     username: str
-    role: str
+    role: Literal["admin", "analyst"]

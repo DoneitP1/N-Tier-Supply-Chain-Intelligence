@@ -121,9 +121,9 @@ async def poll_news_and_analyze():
                     impacted = result[0]['impacted_suppliers'] if result else 0
                     logger.info(f"Successfully logged to DB. Impacted {impacted} mapped supplier(s).")
                 else:
-                    logger.info(f"Risk is {severity}. Ignoring to avoid DB noise.")
+                    logger.info(f"Risk is {severity} (Not High/Critical). Logging for visibility but skipping Knowledge Graph sync to avoid noise.")
             else:
-                logger.info("No supply chain risk detected.")
+                logger.info("No supply chain risk detected in news item.")
                 
             # Sleep to respect free-tier API rate limits
             await asyncio.sleep(2)

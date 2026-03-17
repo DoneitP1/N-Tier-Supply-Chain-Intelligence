@@ -1,4 +1,5 @@
 import uvicorn
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -13,15 +14,8 @@ from core.cache import init_semantic_cache
 # APIRouters
 from api.routes import ingestion, graph, risk, auth, stats
 
-# Rate Limiting
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
+# Prometheus Instrumentation
 from prometheus_fastapi_instrumentator import Instrumentator
-
-# Initialize Rate Limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 
 async def create_db_constraints():
     """Create UNIQUE constraints mapping exactly to Node requirements to prevent duplicates."""
@@ -57,15 +51,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="N-Tier Supply Chain Intelligence API",
-    description="Knowledge Graph ingestion and risk analysis endpoints.",
+    description="""
+    Advanced Knowledge Graph ingestion and risk analysis platform.
+    
+    * **Ingestion**: Automated PDF extraction and news risk assessment.
+    * **Graph**: Real-time N-Tier supply chain visualization.
+    * **Risk**: Recursive simulation of supply path failures and bottleneck detection.
+    """,
     version="1.0.0",
+    contact={
+        "name": "N-Tier Intelligence Support",
+        "url": "https://github.com/DoneitP1/N-Tier-Supply-Chain-Intelligence",
+    },
+    license_info={
+        "name": "MIT License",
+    },
     lifespan=lifespan
 )
-
-# Attach Rate Limiter to FastAPI
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.add_middleware(SlowAPIMiddleware)
 
 # Prometheus Instrumentation
 Instrumentator().instrument(app).expose(app)
