@@ -1,27 +1,22 @@
-"use client";
+import type { Metadata } from 'next';
+import AuthGuard from '@/components/AuthGuard';
+import './globals.css';
 
-import { useAuthStore } from '@/store/authStore';
-import { useRouter, usePathname } from 'next/navigation';
-import { useEffect } from 'react';
+export const metadata: Metadata = {
+  title: 'N-Tier Supply Chain Intelligence',
+  description: 'Supply chain risk analysis platform',
+};
 
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { token } = useAuthStore();
-  const router = useRouter();
-  const pathname = usePathname();
-
-  useEffect(() => {
-    if (!token && pathname !== '/login') {
-      router.push('/login');
-    }
-  }, [token, pathname, router]);
-
   return (
-    <div className="bg-[#0a0a0b] text-white selection:bg-blue-500/30">
-      {children}
-    </div>
+    <html lang="en">
+      <body className="bg-[#0a0a0b] text-white selection:bg-blue-500/30">
+        <AuthGuard>{children}</AuthGuard>
+      </body>
+    </html>
   );
 }

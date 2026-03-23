@@ -11,6 +11,7 @@ from models.schemas import UserCreate, User, Token, TokenData
 from models.pg_models import User as DBUser
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from models.schemas import UserCreate, User, Token, TokenData, UserUpdate
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -132,3 +133,25 @@ async def read_users_me(current_user: TokenData = Depends(get_current_user)):
     Returns the current authenticated user's profile.
     """
     return current_user
+
+@router.put("/update", response_model=User, summary="Update user profile", description="Updates the current logged in user's password.")
+async def update_profile(
+    user_update: UserUpdate,
+    current_user: TokenData = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    user = await get_db_user(db, current_user.username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    hashed_password = get_password_hash(user_update.password)
+    user.hashed_password = hashed_password
+    
+    try:
+        await db.commit()
+        await db.refresh(user)
+        return User(id=user.id, username=user.username, role=user.role)
+    except Exception as e:
+        logger.error(f"Failed to update user: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Update failed")

@@ -7,6 +7,7 @@ interface AuthState {
     username: string;
     role: string;
   } | null;
+  _hasHydrated: boolean;
   setAuth: (user: { username: string; role: string }) => void;
   logout: () => void;
 }
@@ -15,6 +16,7 @@ export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       user: null,
+      _hasHydrated: false,
       setAuth: (user) => {
         set({ user });
       },
@@ -29,6 +31,9 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
+      onRehydrateStorage: () => () => {
+        useAuthStore.setState({ _hasHydrated: true });
+      },
     }
   )
 );

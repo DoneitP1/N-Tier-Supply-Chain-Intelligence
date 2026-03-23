@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000,
+      "cwd": "/Users/29emirhanerturk/Desktop/🫩/N-Tier/frontend"
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "/Users/29emirhanerturk/Desktop/🫩/N-Tier/venv/bin/python",
+      "runtimeArgs": ["main.py"],
+      "port": 8000,
+      "cwd": "/Users/29emirhanerturk/Desktop/🫩/N-Tier"
+    }
+  ]
+}

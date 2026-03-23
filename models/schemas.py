@@ -96,6 +96,9 @@ class UserCreate(UserBase):
 class UserInDB(UserBase):
     hashed_password: str
 
+class UserUpdate(BaseModel):
+    password: str
+
 class User(UserBase):
     id: Optional[int] = None
 

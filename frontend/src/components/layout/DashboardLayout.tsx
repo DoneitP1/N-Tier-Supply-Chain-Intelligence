@@ -6,16 +6,16 @@ import { useAuthStore } from '@/store/authStore';
 import { useRouter } from 'next/navigation';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { token, user } = useAuthStore();
+  const { user } = useAuthStore();
   const router = useRouter();
 
   React.useEffect(() => {
-    if (!token) {
+    if (!user) {
       router.push('/login');
     }
-  }, [token, router]);
+  }, [user, router]);
 
-  if (!token) return null;
+  if (!user) return null;
 
   return (
     <div className="flex bg-[#0a0a0b] min-h-screen text-white">

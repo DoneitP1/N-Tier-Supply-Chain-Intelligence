@@ -57,3 +57,36 @@ async def get_dashboard_stats():
     except Exception as e:
         logger.error(f"Error fetching dashboard stats: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch dashboard statistics.")
+
+@router.get("/system", status_code=status.HTTP_200_OK, dependencies=[Depends(analyst_or_admin)], summary="Get system connectivity status", description="Returns health and connection status of PostgreSQL, Neo4j, and LLM.")
+async def get_system_status():
+    system_status = {
+        "graph": "inactive",
+        "postgres": "inactive",
+        "llm": "inactive"
+    }
+    
+    try:
+        res = await db.execute_query("RETURN 1 as val")
+        if res and res[0].get("val") == 1:
+            system_status["graph"] = "active"
+    except Exception:
+        pass
+        
+    from core.postgres import engine
+    from sqlalchemy import text
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
+            system_status["postgres"] = "active"
+    except Exception:
+        pass
+        
+    from core.config import settings
+    # For LLM, if api key is provided and not placeholder
+    if settings.google_api_key and settings.google_api_key != "placeholder":
+        system_status["llm"] = "active"
+    elif settings.anthropic_api_key and settings.anthropic_api_key != "placeholder" and settings.anthropic_api_key != "sk-ant-placeholder":
+        system_status["llm"] = "active"
+        
+    return system_status
